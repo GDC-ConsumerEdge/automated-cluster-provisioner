@@ -1,6 +1,65 @@
-# GDCE Cluster Provisioner
+# GDC Connected Cluster Provisioner
 
-This solution automatically provisions GDCE clusters as zones are turned up. This removes the need to wait and manually trigger automation after the turn up has complete. [Automated GDCE Cluster Provisioning TDD](https://docs.google.com/document/d/1nRi-V_vzmorZ7It8aPxuXnvZyih8n3wn1G73me6ACco/edit?resourcekey=0-W6AvnU-WWI1ynk4ETH0wAQ&tab=t.0#heading=h.8pa838wf1v4e)
+This solution automates the provisioning and configuration of Google Distributed Cloud connected clusters at scale during pre staging processes as edge zones are turned up. 
+
+## Table of Contents
+- [GDC Connected Cluster Provisioner](#gdc-connected-cluster-provisioner)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+    - [High Level Architecture - Cluster Creation](#high-level-architecture---cluster-creation)
+    - [High Level Architecture - Cluster Modification](#high-level-architecture---cluster-modification)
+    - [Supported Modifications](#supported-modifications)
+  - [Pre-Requisites](#pre-requisites)
+    - [Required Roles for Terraform Agent](#required-roles-for-terraform-agent)
+    - [Cluster Intent Git PAT Token](#cluster-intent-git-pat-token)
+    - [ConfigSync](#configsync)
+  - [Installation](#installation)
+  - [Usage](#usage)
+  - [Cluster Intent Data Format](#cluster-intent-data-format)
+  - [Terraform Details](#terraform-details)
+    - [Providers](#providers)
+    - [Modules](#modules)
+    - [Inputs](#inputs)
+    - [Outputs](#outputs)
+  - [Disclaimer](#disclaimer)
+
+## Overview
+
+The GDC connected cluster provisioner solution is automation which optimizes for:
+
+- **Declared Intent**. Cluster parameters should be specified well ahead of when the cluster can be provisioned. Clusters parameters should be able to be defined months in advanced with cluster creation happening once the Edge Zone is available.
+- **Safety**. By design, errors should not result in fleet wide impact. We do this by preferring manual remediation over automated. Once a cluster is created, there are only a few supported update actions and no supported delete operations.
+- **End to end automation**: With preconfigured declared intent, we design the automation to run without any human intervention. 
+- **Extensibility**. This solution is an opinionated deployment pipeline and will not cover 100% of provisioning workflows or GCP environment requirements. Extension of the provisioning logic is expected.
+
+### High Level Architecture - Cluster Creation
+![High Level Architecture](./docs/automated%20cluster%20provisioner.png)
+
+- **Zone Watcher**: A Cloud Function which polls against the Cluster Intent Data and the available Edge Zones. If there is a declared cluster for a new zone, it will kick off Cloud Build to provision the cluster. Otherwise, it will skip. 
+- **Edge Zone**: There are 2 GDC APIs which are leveraged to detect the availability of an Edge Zone
+  - The [Zone](https://cloud.google.com/distributed-cloud/edge/latest/docs/reference/hardware/rest/v1alpha/projects.locations.zones#Zone) created as part of an order. This provides the `globallyUniqueId` or edge zone node location for use during cluster provisioning as well as the `state` of the zone. 
+  -  The available [machines](https://cloud.google.com/distributed-cloud/edge/latest/docs/reference/container/rest/v1/projects.locations.machines) in a given GCP project. This is used to determine whether a cluster is already running on a set of machines or not through the `hostedNode` property. If a cluster is already provisioned, it will not trigger provisioning.
+-  **Cluster Intent Data**: A CSV file which holds the parameters necessary for cluster creation. Example: [example-source-of-truth.csv](./example-source-of-truth.csv)
+-  **Cloud Build Job**: This is a bash script which queries the cluster intent database to read the necessary parameter to create a cluster, bootstrap configsync and other fleet services, and validate the completion of the provisioning process.
+
+### High Level Architecture - Cluster Modification
+
+![High Level Architecture](./docs/automated%20cluster%20provisioner%20modified.png)
+
+- **Cluster Watcher**: A Cloud Function which polls against the Cluster Intent Data and the available clusters. If there are any supported modifications that need to be made, it will kick off the Cloud Build job.
+- **GDC Clusters**: The GDC Cluster resource. The Cloud watcher function queries against this api to compare parameters against the cluster intent data while the cloud build job will call the appropriate update commands to modify the cluster.
+-  **Cluster Intent Data**: A CSV file which holds the parameters necessary for cluster creation. Example: [example-source-of-truth.csv](./example-source-of-truth.csv)
+-  **Cloud Build Job**: This is a bash script which queries the cluster intent database to read the necessary parameters to modify the cluster.
+  
+### Supported Modifications
+
+By design, the solution does not support destructive operations across the fleet. Beyond cluster creation, these are the supported actions:
+
+- Adding new VLANs
+- Updating the maintenance window, or removing the maintenance window
+- Updating the maintenance exclusion window(s), or removing the maintenance exclusion windows.
+
+Other modifications not listed like deleting a VLAN, or reconfiguring ConfigSync should be scripted outside of this solution. 
 
 ## Pre-Requisites
 ### Required Roles for Terraform Agent
@@ -16,26 +75,64 @@ This solution automatically provisions GDCE clusters as zones are turned up. Thi
 | roles/storage.admin | Main |
 
 
-### Secrets
-* Generate git credentials with access to target repository
-* In secrets project, create a Google Secrets Manager entry and store the git credentials
+### Cluster Intent Git PAT Token
+When using Github, a personal access token must be created and uploaded to Secret Manager. When using Gitlab, a project access token can be configured and uploaded. The automated cluster provisioning solution uses these tokens to query against the cluster intent data, which is a CSV file stored in a git repository.
 
-## Quickstart
+### ConfigSync
+This project assumes the usage of [ConfigSync](https://cloud.google.com/kubernetes-engine/enterprise/config-sync/docs/overview) for handling declared cluster configuration and any necessary workload configuration in the pre-staging environment.
+
+## Installation
 ```
 cd bootstrap
 
 cp terraform.tfvars.example terraform.tfvars
 # update the terraform.tfvars as needed
 
-#terraform init -backend-config=env/prod.gcs.tfbackend 
-terraform init -backend-config=env/staging.gcs.tfbackend   
+terraform init -backend-config=env/prod.gcs.tfbackend 
 terraform plan
-terraform apply -var="environment=stg"
+terraform apply -var="environment=prod"
 ```
 
-Update the `cluster-intent-registry.csv` file with new cluster intents. Trigger the manual cloud build trigger passing in the `_NODE_LOCATION` substitution to target a particular zone. 
+This will deploy all the GCP resources for the automated cluster provisioning solution. Use the `environment=...` terraform variable to separate out multiple instances of the solution. For example, having separated dev vs. prod instances is helpful to validate and ensure any development doesn't disrupt active provisioning.
 
-## Providers
+## Usage
+
+Once the solution is deployed, most usage interaction is expected to happen through the cluster intent data csv file. An example can be found [here](./example-source-of-truth.csv), but each row is one cluster for a given location. The expected sequence would be:
+
+1) Place an [order](https://cloud.google.com/distributed-cloud/edge/latest/docs/reference/hardware/rest/v1alpha/projects.locations.orders/create) through the UI or API in a GCP project and region. This will generate a corresponding [Zone](https://cloud.google.com/distributed-cloud/edge/latest/docs/reference/hardware/rest/v1alpha/projects.locations.zones/get) resource.
+2) Add a new link into the cluster intent data csv file filling out `store_id`, `machine_project_id`, and `location` as the key to find the appropriate edge zone. Then fill out all the other required parameters in the CSV file.
+3) Wait for the next reconciliation loop... and done! If this is a new cluster, you'll see a new Cloud Build job which contains the provisioning logic. 
+
+## Cluster Intent Data Format
+
+| Parameter                                 | Required | Description                                                                                                                                                                                                                   |
+|-------------------------------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| store_id                                  | yes      | This is the same as the order's zone name. It is used to look up state and the corresponding EdgeContainer Zone.                                                                                                              |
+| zone_name                                 | no       | (Optional.) In situations where there is no order placed, or when one wants to bypass the gdc hardware management api logic, you can specify the zone_name here which will skip all api calls to the hardware management api. |
+| machine_project_id                        | yes      | The GCP project that hosts the edge zone.                                                                                                                                                                                     |
+| fleet_project_id                          | yes      | The GCP project that will host the cluster.                                                                                                                                                                                   |
+| cluster_name                              | yes      | The name of the cluster.                                                                                                                                                                                                      |
+| location                                  | yes      | The GCP region. Note that this has to be the same region that the order was placed in. Order region == Edge Zone region == Cluster region.                                                                                    |
+| node_count                                | yes      | The number of nodes in a cluster                                                                                                                                                                                              |
+| cluster_ipv4_cidr                         | yes      | The desired IPv4 CIDR block for Kubernetes pods.                                                                                                                                                                              |
+| services_ipv4_cidr                        | yes      | The desired IPv4 CIDR block for Kubernetes services.                                                                                                                                                                          |
+| external_load_balancer_ipv4_address_pools | yes      | The desired IPv4 CIDR block for ingress traffic of GDC load balancers.                                                                                                                                                        |
+| sync_repo                                 | yes      | The git repository used for ConfigSync's RootSync object.                                                                                                                                                                     |
+| sync_branch                               | yes      | The branch used for ConfigSync's RootSync object.                                                                                                                                                                             |
+| sync_dir                                  | yes      | The path within the repository used for ConfigSync's RootSync object.                                                                                                                                                         |
+| git_token_secrets_manager_name            | yes      | Secrets Manager secret for the git PAT token to deploy into the cluster for ConfigSync to pull github configuration                                                                                                           |
+| cluster_version                           | yes      | Initial cluster version to provision the cluster                                                                                                                                                                              |
+| maintenance_window_start                  | no       | (Optional.) Start time of the MW                                                                                                                                                                                              |
+| maintenance_window_end                    | no       | (Optional.) End time of the MW                                                                                                                                                                                                |
+| maintenance_window_recurrence             | no       | (Optional.) Frequency of the MW                                                                                                                                                                                               |
+| maintenance_exclusion_name_1              | no       | (Optional.) Name of maintenance exclusion window. Supports up to 3 exclusion windows by specifying additional columns `maintenance_exclusion_name_2` and `maintenance_exclusion_name_3`                                       |
+| maintenance_exclusion_start_1             | no       | (Optional.) Start of maintenance exclusion window. Supports up to 3 exclusion windows by specifying additional columns `maintenance_exclusion_start_2` and `maintenance_exclusion_start_3`                                    |
+| maintenance_exclusion_end_1               | no       | (Optional.) End of maintenance exclusion window. Supports up to 3 exclusion windows by specifying additional columns `maintenance_exclusion_end_2` and `maintenance_exclusion_end_3`                                          |
+| subnet_vlans                              | no       | This is used in the cluster provisioning automation to call the edge network API to create a VLANs for a particular edge-zone                                                                                                 |
+| recreate_on_delete                        | yes      | Whether to recreate a cluster with a zone state of `ACTIVE`. This can be used for automated re-provisioning (delete the cluster and it'll automatically re-create).                                                           |
+## Terraform Details
+
+### Providers
 
 | Name | Version |
 |------|---------|
@@ -43,12 +140,12 @@ Update the `cluster-intent-registry.csv` file with new cluster intents. Trigger 
 | <a name="provider_google"></a> [google](#provider\_google) | 5.26.0 |
 | <a name="provider_random"></a> [random](#provider\_random) | 3.6.1 |
 
-## Modules
+### Modules
 
 No modules.
 
 
-## Inputs
+### Inputs
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
@@ -69,7 +166,7 @@ No modules.
 | <a name="input_source_of_truth_path"></a> [source_of_truth_path](#input\_source\_of\_truth\_path) | Path to cluster intent registry file in repository | `string` | n/a | yes |
 | <a name="git_secret_id"></a> [git_secret_id](#input\_git\_secret\_id) | Git token to authenticate with source of truth | `string` | n/a | yes |
 
-## Outputs
+### Outputs
 
 No outputs.
 
