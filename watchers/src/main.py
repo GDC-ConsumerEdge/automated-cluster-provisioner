@@ -177,6 +177,7 @@ def zone_watcher(req: flask.Request):
                     count_of_free_machines = count_of_free_machines+1
 
             if cluster_exists:
+                logger.info(f'Cluster already exists for {zone}. Skipping..')
                 continue
 
             if count_of_free_machines >= int(store_info["node_count"]):
