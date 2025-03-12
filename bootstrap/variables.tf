@@ -68,6 +68,7 @@ variable "project_services_fleet" {
     "gkeonprem.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "kubernetesmetadata.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
     "opsconfigmonitoring.googleapis.com",
