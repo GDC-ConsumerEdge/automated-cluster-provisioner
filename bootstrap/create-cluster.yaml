@@ -22,11 +22,11 @@ steps:
     set +x
     set -o pipefail
 
-    HARDWARE_MANAGMENT_API_ENDPOINT="https://gdchardwaremanagement.googleapis.com"
-    if [[ -n "${HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE}" ]]; then
-      HARDWARE_MANAGMENT_API_ENDPOINT=${HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE}
+    HARDWARE_MANAGEMENT_API_ENDPOINT="https://gdchardwaremanagement.googleapis.com"
+    if [[ -n "${HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE}" ]]; then
+      HARDWARE_MANAGEMENT_API_ENDPOINT=${HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE}
     fi
-    HARDWARE_MANAGMENT_API_VERSION="v1alpha"
+    HARDWARE_MANAGEMENT_API_VERSION="v1alpha"
 
     function die() {
       echo "$1"
@@ -40,7 +40,7 @@ steps:
       state_signal=$2
       [[ -z "${zone_store_path}" ]] && { echo "zone_store_path not provided"; return ; }
 
-      SIGNAL_URI="${HARDWARE_MANAGMENT_API_ENDPOINT}/${HARDWARE_MANAGMENT_API_VERSION}/${zone_store_path}:signal"
+      SIGNAL_URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${zone_store_path}:signal"
       out=$(curl -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             -H "Content-Type: application/json" \
             -X POST \
@@ -52,7 +52,7 @@ steps:
       fi
 
       operation_id=$(echo $out | jq -r .name)
-      URI="${HARDWARE_MANAGMENT_API_ENDPOINT}/${HARDWARE_MANAGMENT_API_VERSION}/${operation_id}"
+      URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${operation_id}"
       count=0
       max_retries=10
       while [[ ${count} -lt ${max_retries} ]]; do
@@ -319,7 +319,7 @@ steps:
   - 'EDGE_CONTAINER_API_ENDPOINT_OVERRIDE=$_EDGE_CONTAINER_API_ENDPOINT_OVERRIDE'
   - 'EDGE_NETWORK_API_ENDPOINT_OVERRIDE=$_EDGE_NETWORK_API_ENDPOINT_OVERRIDE'
   - 'GKEHUB_API_ENDPOINT_OVERRIDE=$_GKEHUB_API_ENDPOINT_OVERRIDE'
-  - 'HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE=$_HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE'
+  - 'HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE=$_HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE'
   - 'CLUSTER_INTENT_BUCKET=$_CLUSTER_INTENT_BUCKET'
   - 'SOURCE_OF_TRUTH_REPO=$_SOURCE_OF_TRUTH_REPO'
   - 'SOURCE_OF_TRUTH_BRANCH=$_SOURCE_OF_TRUTH_BRANCH'
