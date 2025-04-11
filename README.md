@@ -21,6 +21,7 @@ This solution automates the provisioning and configuration of Google Distributed
   - [Operations](#operations)
     - [Metrics](#metrics)
     - [Alerts](#alerts)
+    - [Automated Retries](#automated-retries)
   - [Terraform Details](#terraform-details)
     - [Providers](#providers)
     - [Modules](#modules)
@@ -175,6 +176,13 @@ This table describes the alerts created to monitoring cluster provisioning. Thes
 | unknown-zone-alert       | Alerts whenever an unknown zone not defined in the cluster intent source of truth has been found in the environment. |
 | cluster-creation-failure | Alerts when cluster creation has failed                                                                              |
 | cluster-modify-failure   | Alerts when cluster modification has failed                                                                          |
+
+### Automated Retries
+
+Automated retries can be configured to address intermittent build failures. To enable, set the `cluster-creation-max-retries` variable in the terraform to a value greater than 0 but less than 5. The solution tracks the number of failed builds for a zone and will retry them until the number exceeds the specified max retry.
+
+> [!Note]
+> If you decrease the number of `cluster-creation-max-retries`, this may impact in-progress builds from properly calling the [zone's signal endpoint](https://cloud.google.com/distributed-cloud/edge/latest/docs/reference/hardware/rest/v1alpha/projects.locations.zones/signal) properly. Be sure to manually check that any failed builds are properly retried. This is not a concern when increasing the value.
 
 ## Terraform Details
 

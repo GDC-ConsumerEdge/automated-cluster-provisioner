@@ -31,7 +31,22 @@ steps:
     function die() {
       echo "$1"
       echo "Cluster Creation Failed: $CLUSTER_NAME"
-      zone_signal "projects/${MACHINE_PROJECT_ID}/locations/${LOCATION}/zones/${STORE_ID}" FACTORY_TURNUP_CHECKS_FAILED
+
+      if [[ "$MAX_RETRIES" -eq 0 ]]; then
+        echo "Marking zone as failed"
+        zone_signal "projects/${MACHINE_PROJECT_ID}/locations/${LOCATION}/zones/${STORE_ID}" FACTORY_TURNUP_CHECKS_FAILED
+      else
+        # Will include the current build as well
+        BUILD_COUNT=$(gcloud builds list --filter "tags='$STORE_ID' AND substitutions.TRIGGER_NAME='$TRIGGER_NAME'" --region us-central1 --format="csv[no-heading](name)" | wc -l)
+
+        if [[ "$BUILD_COUNT" -gt "$MAX_RETRIES" ]]; then
+          echo "Current build count $BUILD_COUNT exceed max retries $MAX_RETRIES. Marking zone as failed"
+          zone_signal "projects/${MACHINE_PROJECT_ID}/locations/${LOCATION}/zones/${STORE_ID}" FACTORY_TURNUP_CHECKS_FAILED
+        else
+          echo "Current build count $BUILD_COUNT is <= max retries $MAX_RETRIES. Skipping for next retry"
+        fi
+      fi
+
       exit 1
     }
 
@@ -333,6 +348,8 @@ steps:
   - 'ZONE=$_ZONE'
   - 'CS_VERSION=$_CS_VERSION'
   - 'BART_CREATE_BUCKET=$_BART_CREATE_BUCKET'
+  - 'MAX_RETRIES=$_MAX_RETRIES'
+  - 'TRIGGER_NAME=$TRIGGER_NAME'
 
 options:
   logging: CLOUD_LOGGING_ONLY

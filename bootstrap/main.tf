@@ -28,6 +28,7 @@ locals {
     { _GIT_SECRETS_PROJECT_ID = local.project_id_secrets },
     { _TIMEOUT_IN_SECONDS = var.cluster-creation-timeout },
     { _CS_VERSION = var.default-config-sync-version },
+    { _MAX_RETRIES = var.cluster-creation-max-retries },
     var.skip_identity_service == true ? { _SKIP_IDENTITY_SERVICE = "TRUE" } : {_SKIP_IDENTITY_SERVICE = "FALSE"},
     var.bart_create_bucket == true ? { _BART_CREATE_BUCKET = "TRUE" } : { _BART_CREATE_BUCKET = "FALSE" },
   )
@@ -179,6 +180,12 @@ resource "google_project_iam_member" "gdce-provisioning-agent-storage-admin" {
 resource "google_project_iam_member" "gdce-provisioning-agent-log-writer" {
   project = var.project_id
   role    = "roles/logging.logWriter"
+  member  = google_service_account.gdce-provisioning-agent.member
+}
+
+resource "google_project_iam_member" "gdce-provisioning-agent-build-viewer" {
+  project = var.project_id
+  role    = "roles/cloudbuild.builds.viewer"
   member  = google_service_account.gdce-provisioning-agent.member
 }
 

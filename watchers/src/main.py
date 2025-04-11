@@ -14,7 +14,6 @@
 
 from dataclasses import dataclass
 import functions_framework
-import sys
 import os
 import io
 import flask
@@ -37,8 +36,8 @@ from google.cloud.devtools import cloudbuild
 from google.cloud import monitoring_v3
 from google.protobuf.timestamp_pb2 import Timestamp
 from dateutil.parser import parse
-from typing import Dict
 from .maintenance_windows import MaintenanceExclusionWindow
+from .build_history import BuildHistory
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
@@ -55,7 +54,8 @@ class WatcherParameters:
     source_of_truth_branch: str
     source_of_truth_path: str
     cloud_build_trigger: str
-
+    cloud_build_trigger_name: str
+    max_retries: int
 
 def get_parameters_from_environment():
     proj_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -65,8 +65,10 @@ def get_parameters_from_environment():
     source_of_truth_repo = os.environ.get("SOURCE_OF_TRUTH_REPO")
     source_of_truth_branch = os.environ.get("SOURCE_OF_TRUTH_BRANCH")
     source_of_truth_path = os.environ.get("SOURCE_OF_TRUTH_PATH")
+    max_retries = int(os.environ.get("MAX_RETRIES", "0"))
 
     cb_trigger = f'projects/{proj_id}/locations/{region}/triggers/{os.environ.get("CB_TRIGGER_NAME")}'
+    cb_trigger_name = os.environ.get("CB_TRIGGER_NAME")
 
     if secrets_project is None:
         secrets_project = proj_id
@@ -77,6 +79,8 @@ def get_parameters_from_environment():
         raise Exception('missing REGION (us-central1)')
     if cb_trigger is None:
         raise Exception('missing CB_TRIGGER_NAME (projects/<project-id>/locations/<location>/triggers/<trigger-name>)')
+    if cb_trigger_name is None:
+        raise Exception('missing CB_TRIGGER_NAME')
     if git_secret_id is None:
         raise Exception('missing secret id for git pull credentials')
     if source_of_truth_repo is None:
@@ -87,16 +91,20 @@ def get_parameters_from_environment():
         raise Exception('missing path and name of source of truth')
     if '//' in source_of_truth_repo:
         raise Exception('provide repo in the form of (github.com/org_name/repo_name) or (gitlab.com/org_name/repo_name)')
+    if max_retries < 0 or max_retries > 5:
+        raise Exception('max retries must be a value between 0 and 5')
 
     return WatcherParameters(
         project_id=proj_id,
         secrets_project_id=secrets_project,
         region=region,
         cloud_build_trigger=cb_trigger,
+        cloud_build_trigger_name=cb_trigger_name,
         git_secret_id=git_secret_id,
         source_of_truth_repo=source_of_truth_repo,
         source_of_truth_branch=source_of_truth_branch,
         source_of_truth_path=source_of_truth_path,
+        max_retries=max_retries
     )
 
 
@@ -115,6 +123,8 @@ def zone_watcher(req: flask.Request):
     else:  # use the default prod endpoint
         ec_client = edgecontainer.EdgeContainerClient()
     cb_client = cloudbuild.CloudBuildClient()
+
+    builds = BuildHistory(params.project_id, params.region, params.max_retries, params.cloud_build_trigger_name)
 
     # get machines list per machine_project per location, and group by GDCE zone
     machine_lists = {}
@@ -136,7 +146,7 @@ def zone_watcher(req: flask.Request):
             logger.error(f"Error listing machines for project: {machine_project}, location: {location}")
             logger.error(err)
 
-    # if cluster already present in the zone, skip this zone
+    # if cluster already present in the zone, skip this zone unless the zone build should be retried
     # method: check all the machines in the zone, and check if "hosted_node" has any value in it
     count = 0
     for proj_loc_key in config_zone_info:
@@ -176,7 +186,7 @@ def zone_watcher(req: flask.Request):
                     logger.info(f'ZONE {zone}: {m.name} is a free node')
                     count_of_free_machines = count_of_free_machines+1
 
-            if cluster_exists:
+            if cluster_exists and not builds.should_retry_zone_build(zone):
                 logger.info(f'Cluster already exists for {zone}. Skipping..')
                 continue
 
@@ -184,7 +194,8 @@ def zone_watcher(req: flask.Request):
                 logger.info(f'ZONE {zone}: There are enough free  nodes to create cluster')
             else:
                 logger.info(f'ZONE {zone}: Not enough free  nodes to create cluster. Need {str(store_info["node_count"])} but have {str(count_of_free_machines)} free nodes')
-                continue
+                if not builds.should_retry_zone_build(zone):
+                    continue
 
             if zone_name_retrieved_from_api and not verify_zone_state(zone_store_id, store_info['recreate_on_delete']):
                 logger.info(f'Zone: {zone}, Store: {store_id} is not in expected state! skipping..')

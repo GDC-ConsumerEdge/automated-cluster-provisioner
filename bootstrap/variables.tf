@@ -152,6 +152,12 @@ variable "cluster-creation-timeout" {
   type        = number
 }
 
+variable "cluster-creation-max-retries" {
+  description = "The maximum number of retries upon cluster creation failure before marking the zone state as CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED"
+  default     = "0"
+  type        = number
+}
+
 # https://cloud.google.com/kubernetes-engine/enterprise/config-sync/docs/release-notes
 variable "default-config-sync-version" {
   description = "Sets a default ConfigSync version to use for provisioned clusters. If left empty, it will not specify a version at the cluster level. If empty, this will either install the fleet configured version or the latest version of ConfigSync."
