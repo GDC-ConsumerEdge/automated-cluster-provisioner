@@ -15,7 +15,9 @@ This solution automates the provisioning and configuration of Google Distributed
     - [ConfigSync](#configsync)
   - [Installation](#installation)
   - [Usage](#usage)
-  - [Cluster Intent Data Format](#cluster-intent-data-format)
+  - [Cluster Intent](#cluster-intent)
+    - [Cluster Intent Data Format](#cluster-intent-data-format)
+    - [Cluster Intent Validation](#cluster-intent-validation)
   - [Operations](#operations)
     - [Metrics](#metrics)
     - [Alerts](#alerts)
@@ -115,7 +117,9 @@ Once the solution is deployed, most usage interaction is expected to happen thro
 2) Add a new line into the cluster intent data csv file filling out `store_id`, `machine_project_id`, and `location` as the key to find the appropriate edge zone. Then fill out all the other required parameters in the CSV file.
 3) Wait for the next reconciliation loop... and done! If this is a new cluster, you'll see a new Cloud Build job which contains the provisioning logic. 
 
-## Cluster Intent Data Format
+## Cluster Intent
+
+### Cluster Intent Data Format
 
 | Parameter                                 | Required | Description                                                                                                                                                                                                                   |
 |-------------------------------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -142,6 +146,10 @@ Once the solution is deployed, most usage interaction is expected to happen thro
 | maintenance_exclusion_end_1               | no       | (Optional.) End of maintenance exclusion window. Supports up to 3 exclusion windows by specifying additional columns `maintenance_exclusion_end_2` and `maintenance_exclusion_end_3`                                          |
 | subnet_vlans                              | no       | This is used in the cluster provisioning automation to call the edge network API to create a VLANs for a particular edge-zone                                                                                                 |
 | recreate_on_delete                        | yes      | Whether to recreate a cluster with a zone state of `ACTIVE`. This can be used for automated re-provisioning (delete the cluster and it'll automatically re-create).                                                           |
+
+### Cluster Intent Validation
+
+We recommend that cluster intent is validated as part of the PR process for proper format and values. There are a number of validation tools available, and we provide an example validation github action that uses the [csv-validator](https://github.com/GDC-ConsumerEdge/csv-validator) tool. For more information, view the [validation model](./validation/cluster_intent.py) and the [validation github action](./.github/workflows/validate_sot.yaml)
 
 ## Operations
 

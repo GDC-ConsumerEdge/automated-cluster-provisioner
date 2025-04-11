@@ -1,0 +1,30 @@
+name: validate sot
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+run-name: run-validation
+
+jobs:
+  run-validation:
+    runs-on: ubuntu-latest
+    steps: 
+      - uses: actions/checkout@v4
+      - name: Checkout csv-validator tool
+        uses: actions/checkout@v4
+        with:
+          repository: GDC-ConsumerEdge/csv-validator
+          path: csv-validator
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12' 
+      - name: run validator
+        run: |
+          pushd csv-validator
+          python3 -m venv .
+          source bin/activate
+
+          python3 -m pip install -r requirements.txt
+          python3 -m pip install .
+          popd
+
+          validate_csv -v -m validation/cluster_intent.py example-source-of-truth.csv
