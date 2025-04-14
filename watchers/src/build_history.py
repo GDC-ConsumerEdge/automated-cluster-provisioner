@@ -117,7 +117,7 @@ class BuildHistory:
             if not zone:
                 # Builds are expected to have the _ZONE substitution. This is the value that is
                 # matched on to calculate whether a build should be retried or not. 
-                logging.warning(f"build found within _ZONE substitution, skipping... Build ID: {response.id}")
+                logging.warning(f"build found without _ZONE substitution, skipping... Build ID: {response.id}")
                 continue
 
             if zone in build_summary_dict:
