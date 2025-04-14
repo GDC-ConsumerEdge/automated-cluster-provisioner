@@ -197,17 +197,8 @@ class TestBuildHistory(unittest.TestCase):
         mock_client.list_build_triggers.return_value = [mock_trigger]
 
         history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
-        build_dict = history._get_build_history()
 
-        self.assertEqual(build_dict, {})
-        mock_client.list_build_triggers.assert_called_once()
-        # Should call list_builds with an empty filter if no matching triggers found
-        mock_client.list_builds.assert_called_once_with(request=cloudbuild.ListBuildsRequest(
-            project_id=self.project_id,
-            filter="", # Empty filter
-            parent=self.parent
-        ))
-
+        self.assertRaises(Exception, history._get_build_history)
 
     def test_get_build_history_matching_trigger_no_builds(self, MockCloudBuildClient):
         mock_client = MockCloudBuildClient.return_value

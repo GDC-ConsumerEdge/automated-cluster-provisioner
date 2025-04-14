@@ -80,15 +80,15 @@ class BuildHistory:
 
         triggers = self.client.list_build_triggers(trigger_request)
 
-        if len(triggers) == 0:
-            raise Exception(f"No triggers found named {self.trigger_name}")
-
         for trigger in triggers:
             if (trigger.name == self.trigger_name):
                 if trigger_name_filter == "":
                     trigger_name_filter += f"trigger_id={trigger.id}"
                 else:
                     trigger_name_filter += f" OR trigger_id={trigger.id}"
+
+        if trigger_name_filter == "":
+            raise Exception(f"No triggers found named {self.trigger_name}")
 
         request = cloudbuild.ListBuildsRequest(
             project_id=self.project_id,
