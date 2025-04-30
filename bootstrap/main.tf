@@ -359,6 +359,7 @@ resource "google_cloudfunctions2_function" "zone-watcher" {
       SOURCE_OF_TRUTH_PATH                     = var.source_of_truth_path
       PROJECT_ID_SECRETS                       = var.project_id_secrets
       GIT_SECRET_ID                            = var.git_secret_id
+      MAX_RETRIES                              = var.cluster-creation-max-retries
     }
     service_account_email = google_service_account.zone-watcher-agent.email
   }
