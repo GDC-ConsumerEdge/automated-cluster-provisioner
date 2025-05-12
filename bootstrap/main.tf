@@ -20,7 +20,7 @@ locals {
     var.edge_container_api_endpoint_override != "" ? { _EDGE_CONTAINER_API_ENDPOINT_OVERRIDE = var.edge_container_api_endpoint_override } : {},
     var.edge_network_api_endpoint_override != "" ? { _EDGE_NETWORK_API_ENDPOINT_OVERRIDE = var.edge_network_api_endpoint_override } : {},
     var.gke_hub_api_endpoint_override != "" ? { _GKEHUB_API_ENDPOINT_OVERRIDE = var.gke_hub_api_endpoint_override } : {},
-    var.hardware_management_api_endpoint_override != "" ? { _HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override } : {},
+    var.hardware_management_api_endpoint_override != "" ? { _HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override } : {},
     { _SOURCE_OF_TRUTH_REPO = var.source_of_truth_repo },
     { _SOURCE_OF_TRUTH_BRANCH = var.source_of_truth_branch },
     { _SOURCE_OF_TRUTH_PATH = var.source_of_truth_path },
