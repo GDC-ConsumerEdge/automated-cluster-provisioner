@@ -170,3 +170,9 @@ variable "bart_create_bucket" {
   type        = bool
   default     = false
 }
+
+variable "opt_in_build_messages" {
+  description = "Opt in to sending build steps and failure messages to Google. These messages helps Google provide support on issues during the provisioning process."
+  type        = bool
+  default     = false
+}

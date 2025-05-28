@@ -29,19 +29,22 @@ steps:
     HARDWARE_MANAGEMENT_API_VERSION="v1alpha"
 
     function die() {
-      echo "$1"
+      step=$1
+      details=$2
+      echo "$step"
+      echo "$details"
       echo "Cluster Creation Failed: $CLUSTER_NAME"
 
       if [[ "$MAX_RETRIES" -eq 0 ]]; then
         echo "Marking zone as failed"
-        zone_signal "projects/${MACHINE_PROJECT_ID}/locations/${LOCATION}/zones/${STORE_ID}" FACTORY_TURNUP_CHECKS_FAILED
+        zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
       else
         # Will include the current build as well
         BUILD_COUNT=$(gcloud builds list --filter "tags='$STORE_ID' AND substitutions.TRIGGER_NAME='$TRIGGER_NAME'" --region us-central1 --format="csv[no-heading](name)" | wc -l)
 
         if [[ "$BUILD_COUNT" -gt "$MAX_RETRIES" ]]; then
           echo "Current build count $BUILD_COUNT exceed max retries $MAX_RETRIES. Marking zone as failed"
-          zone_signal "projects/${MACHINE_PROJECT_ID}/locations/${LOCATION}/zones/${STORE_ID}" FACTORY_TURNUP_CHECKS_FAILED
+          zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
         else
           echo "Current build count $BUILD_COUNT is <= max retries $MAX_RETRIES. Skipping for next retry"
         fi
@@ -50,20 +53,80 @@ steps:
       exit 1
     }
 
+    log_build_step() {
+      message=$1
+      echo $message
+
+      zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_STARTED "$message"
+    }
+
+    # Sets the `UNDER_FACTORY_CHECKS` to either true if ZoneState is ready, started, or failed
+    # or false for all other ZoneStates or for provisioning that bypasses the ZoneState.
+    function set_factory_check_flag() {
+
+      zone_store_path=$1
+
+      [[ -n "${UNDER_FACTORY_CHECKS}" ]] && { return; } # UNDER_FACTORY_CHECKS already set
+      [[ -z "${zone_store_path}" ]] && { export UNDER_FACTORY_CHECKS=FALSE; echo "zone signaling disabled"; return ; }
+
+      ZONE_URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${zone_store_path}"
+
+      out=$(curl -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+            -H "Content-Type: application/json" \
+            -X GET \
+            "${ZONE_URI}" -s | jq '.state' -r)
+
+      if [[ $? -ne 0 ]]; then
+        die "Failed to signal the zone state"
+      fi
+
+      if [[ "$out" == "READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS" || \
+            "$out" == "CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED" || \
+            "$out" == "CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED" ]]; then
+        echo "zone signaling enabled"
+        export UNDER_FACTORY_CHECKS=TRUE
+      else
+        echo "zone signaling disabled"
+        export UNDER_FACTORY_CHECKS=FALSE
+      fi
+    }
+
     function zone_signal() {
       zone_store_path=$1
       state_signal=$2
+      step=$3
+      details=$4
+
       [[ -z "${zone_store_path}" ]] && { echo "zone_store_path not provided"; return ; }
 
+      if [[ "$UNDER_FACTORY_CHECKS" == "FALSE" ]]; then
+        return;
+      fi
+
+      if [[ "$OPT_IN_BUILD_MESSAGES" != "TRUE" ]]; then
+        step=""
+        details=""
+      fi
+
       SIGNAL_URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${zone_store_path}:signal"
-      out=$(curl -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+
+      if [[ $state_signal == "FACTORY_TURNUP_CHECKS_STARTED" ]]; then
+        state_signal_payload="{\"state_signal\": \"${state_signal}\", \"step\": \"${step}\"}"
+      elif [[ $state_signal == "FACTORY_TURNUP_CHECKS_FAILED" ]]; then
+        state_signal_payload="{\"state_signal\": \"${state_signal}\", \"step\": \"${step}\", \"details\": \"${details}\"}"
+      else
+        state_signal_payload="{\"state_signal\": \"${state_signal}\"}"
+      fi
+
+      out=$(curl -s -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             -H "Content-Type: application/json" \
             -X POST \
             "${SIGNAL_URI}" \
-            -d "{\"state_signal\": \"${state_signal}\"}")
+            -d "$state_signal_payload")
+
+
       if [[ $? -ne 0 ]]; then
-        echo "Failed to signal the zone state"
-        return 1
+        die "Failed to signal the zone state"
       fi
 
       operation_id=$(echo $out | jq -r .name)
@@ -75,7 +138,6 @@ steps:
             "${URI}" | jq -r .done)
         [[ "${is_completed}" != "false" ]] && break
       done
-
     }
 
     function parse_csv_required() {
@@ -141,6 +203,12 @@ steps:
     export SUBNET_VLANS=$(parse_csv_optional "$CLUSTER_INTENT" "subnet_vlans")
     export ZONE_NAME_FROM_SOT=$(parse_csv_optional "$CLUSTER_INTENT" "zone_name")
     export LABELS=$(parse_csv_optional "$CLUSTER_INTENT" "labels")
+    export ZONE_ID="projects/${MACHINE_PROJECT_ID}/locations/${LOCATION}/zones/${STORE_ID}"
+    if [[ -n "${ZONE_NAME_FROM_SOT}" ]]; then
+      set_factory_check_flag
+    else
+      set_factory_check_flag $ZONE_ID
+    fi
 
     if [ -n "${EDGE_CONTAINER_API_ENDPOINT_OVERRIDE:-}" ]; then
       echo "Setting api_endpoint_overrides/edgecontainer to $EDGE_CONTAINER_API_ENDPOINT_OVERRIDE"
@@ -160,14 +228,22 @@ steps:
       gcloud config set api_endpoint_overrides/edgenetwork $EDGE_NETWORK_API_ENDPOINT_OVERRIDE
     fi
 
+    log_build_step "Beginning provisioning"
+
     gcloud edge-cloud container clusters describe $CLUSTER_NAME --location $LOCATION \
-        --project $FLEET_PROJECT_ID
+        --project $FLEET_PROJECT_ID --verbosity none
 
     if [ $? -eq 0 ]; then
-      echo "Cluster already created, skipping to next step."
+      log_build_step "Cluster already created, skipping to next step."
     else
-      echo "Creating cluster"
-      gcloud edge-cloud container clusters create $CLUSTER_NAME \
+      log_build_step "Creating cluster"
+
+      # Create a new FD to support stdout,stderr to console + saving to bash variable
+      # This is used to output the opid before the operation has completed
+      exec 5>&1
+
+      out=$(
+        gcloud edge-cloud container clusters create $CLUSTER_NAME \
           --control-plane-node-location=$NODE_LOCATION \
           --control-plane-node-count=$NODE_COUNT \
           --cluster-ipv4-cidr=$CLUSTER_IPV4_CIDR \
@@ -178,34 +254,38 @@ steps:
           --project=$FLEET_PROJECT_ID \
           --release-channel=NONE \
           --version $CLUSTER_VERSION \
-          --offline-reboot-ttl=7d
+          --offline-reboot-ttl=7d 2>&1 | tee /dev/fd/5
+      )
 
-      [[ $? -ne 0 ]] && die "Failure from gcloud edge-cloud container clusters ..."
+      [[ $? -ne 0 ]] && die "Failure from gcloud edge-cloud container clusters" "$out"
 
     fi
 
     if [[ -z "${MAINTENANCE_WINDOW_START}" || -z ${MAINTENANCE_WINDOW_END} || \
             -z ${MAINTENANCE_WINDOW_RECURRENCE} ]]; then
-      echo "All maintenance window fields are not set, skipping"
+      log_build_step "All maintenance window fields are not set, skipping"
       echo "MAINTENANCE_WINDOW_START=${MAINTENANCE_WINDOW_START}"
       echo "MAINTENANCE_WINDOW_END=${MAINTENANCE_WINDOW_END}"
       echo "MAINTENANCE_WINDOW_RECURRENCE=${MAINTENANCE_WINDOW_RECURRENCE}"
     else
-      gcloud edge-cloud container clusters update $CLUSTER_NAME \
+      log_build_step "Setting maintenance window"
+      out=$(gcloud edge-cloud container clusters update $CLUSTER_NAME \
           --project=$FLEET_PROJECT_ID \
           --location=$LOCATION \
           --maintenance-window-start=$MAINTENANCE_WINDOW_START \
           --maintenance-window-end=$MAINTENANCE_WINDOW_END \
-          --maintenance-window-recurrence=$MAINTENANCE_WINDOW_RECURRENCE
-      [[ $? -ne 0 ]] && die "Maintenance window update failed"
+          --maintenance-window-recurrence=$MAINTENANCE_WINDOW_RECURRENCE)
+      [[ $? -ne 0 ]] && die "Maintenance window update failed" "$out"
     fi
 
-    gcloud edge-cloud networking zones init $NODE_LOCATION \
+    log_build_step "Initializing zone network"
+    out=$(gcloud edge-cloud networking zones init $NODE_LOCATION \
       --project=$MACHINE_PROJECT_ID \
-      --location=$LOCATION
+      --location=$LOCATION)
 
-    [[ $? -ne 0 ]] && die "Zone network failed to initialize"
+    [[ $? -ne 0 ]] && die "Zone network failed to initialize" "$out"
 
+    log_build_step "Configuring zone subnets"
     for vlan in $(echo $SUBNET_VLANS | csvtool transpose -); do
       EXISTING_VLAN=$(gcloud edge-cloud networking subnets list --location $LOCATION \
           --zone $NODE_LOCATION --project $MACHINE_PROJECT_ID \
@@ -214,13 +294,13 @@ steps:
       [[ $? -ne 0 ]] && die "Unable to query for subnets"
 
       if [ "$EXISTING_VLAN" = "[]" ]; then
-        gcloud edge-cloud networking subnets create "network-$vlan" \
+        out=$(gcloud edge-cloud networking subnets create "network-$vlan" \
             --vlan-id=$vlan \
             --network=default \
             --location=$LOCATION \
             --zone=$NODE_LOCATION \
-            --project $MACHINE_PROJECT_ID
-        [[ $? -ne 0 ]] && die "Subnet creation failed"
+            --project $MACHINE_PROJECT_ID)
+        [[ $? -ne 0 ]] && die "Subnet creation failed" "$out"
       else
         echo "VLAN $vlan already exists"
       fi
@@ -230,6 +310,7 @@ steps:
     trap 'die "Error configuring cluster"' ERR
 
     if [ -n "$LABELS" ]; then
+      log_build_step "Adding fleet membership labels"
       gcloud container fleet memberships update $CLUSTER_NAME --clear-labels --update-labels $LABELS
     fi
 
@@ -237,7 +318,6 @@ steps:
     gcloud container fleet memberships get-credentials $CLUSTER_NAME --project $FLEET_PROJECT_ID
 
     gsutil cp gs://$CLUSTER_INTENT_BUCKET/apply-spec.yaml.template .
-    gsutil cp gs://$CLUSTER_INTENT_BUCKET/auth-config.yaml .
 
     if [[ -n "$CS_VERSION" ]]; then
       export CS_VERSION_YAML="version: $CS_VERSION"
@@ -245,6 +325,7 @@ steps:
 
     envsubst < apply-spec.yaml.template > apply-spec.yaml
 
+    log_build_step "Configuring configsync"
     gcloud secrets versions access latest --secret=$GIT_TOKEN_SECRETS_MANAGER_NAME \
         --project $SECRETS_PROJECT_ID >> "$(pwd)/git-creds"
 
@@ -258,11 +339,12 @@ steps:
         --config=./apply-spec.yaml --project $FLEET_PROJECT_ID
 
     if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]]; then
+      log_build_step "Configuring Group RBAC"
       FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)')
       kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}'
-      echo "Group RBAC applied"
+      log_build_step "Group RBAC applied"
     else
-      echo "Skipping Group RBAC setup"
+      log_build_step "Skipping Group RBAC setup"
     fi
 
     set +eE
@@ -271,7 +353,7 @@ steps:
     if [ -z "${SKIP_HEALTH_CHECK}" ]; then
       count=0
       max_retries=240 # 1200s/20min
-      echo "Waiting for health check resource to be created"
+      log_build_step "Waiting for health check resource to be created"
       while [[ ${count} -lt ${max_retries} ]]; do
         kubectl get healthchecks.validator.gdc.gke.io/default >/dev/null 2>&1 && break
         echo -n .
@@ -280,6 +362,7 @@ steps:
       done
       [[ ${count} -ge ${max_retries} ]] && die "Health check resource not created after 20min"
 
+      log_build_step "Waiting for platform healthchecks to pass"
       kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy \
           --timeout=1h || die "Platform is not healthy after 1h"
 
@@ -288,6 +371,7 @@ steps:
       #                       - (10m for extra buffer) - (30m for vm wait)
       WORKLOAD_TIMEOUT="$(($TIMEOUT_IN_SECONDS-"9600"))"
 
+      log_build_step "Waiting for workload healthchecks to pass"
       kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy \
           --timeout="${WORKLOAD_TIMEOUT}s" || die "Workloads are not healthy after ${WORKLOAD_TIMEOUT}s"
     fi
@@ -299,10 +383,10 @@ steps:
     curl -L https://github.com/kubevirt/kubevirt/releases/download/${VIRTCTL_VERSION}/virtctl-${VIRTCTL_VERSION}-linux-amd64 -o virtctl
     chmod +x virtctl
 
-    echo "Waiting 30m before shutting down VMs"
+    log_build_step "Waiting 30m before shutting down VMs"
     sleep 30m
 
-    echo "Shutting down running VMs"
+    log_build_step "Shutting down running VMs"
     for vm in $(kubectl get vmi -n vm-workloads --no-headers | awk '{print $1}'); do
       echo "Shutting down $vm"
       ./virtctl stop -n vm-workloads $vm
@@ -315,18 +399,14 @@ steps:
       if [[ ! -z $(gcloud storage buckets describe gs://${CLUSTER_NAME}-bart-backup --project=${FLEET_PROJECT_ID}) ]]; then
         echo "GCS bucket already exists"
       else
-        echo "Creating and setting up new BART related GCS bucket"
+        log_build_step "Creating and setting up new BART related GCS bucket"
         gcloud storage buckets create gs://${CLUSTER_NAME}-bart-backup --location=${LOCATION} --project=${FLEET_PROJECT_ID}
       fi
     else
       echo "Backups for this cluster is not enabled. Not creating GCS bucket."
     fi
 
-    if [[ -n "${ZONE_NAME_FROM_SOT}" ]]; then
-      echo "Zone name is defined in SOT... skipping zone signal completion."
-    else
-      zone_signal "projects/${MACHINE_PROJECT_ID}/locations/${LOCATION}/zones/${STORE_ID}" READY_FOR_SITE_TURNUP
-    fi
+    zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_PASSED
 
     echo "Cluster Creation Succeeded: $CLUSTER_NAME"
 
@@ -350,6 +430,7 @@ steps:
   - 'BART_CREATE_BUCKET=$_BART_CREATE_BUCKET'
   - 'MAX_RETRIES=$_MAX_RETRIES'
   - 'TRIGGER_NAME=$TRIGGER_NAME'
+  - 'OPT_IN_BUILD_MESSAGES=$_OPT_IN_BUILD_MESSAGES'
 
 options:
   logging: CLOUD_LOGGING_ONLY
