@@ -203,10 +203,7 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| <a name="input_edge_container_api_endpoint_override"></a> [edge\_container\_api\_endpoint\_override](#input\_edge\_container\_api\_endpoint\_override) | Google Distributed Cloud Edge API | `string` | `"https://edgecontainer.googleapis.com/"` | no |
-| <a name="input_hardware_management_api_endpoint_override"></a> [hardware\_management\_api\_endpoint\_override](#input\_hardware\_management\_api\_endpoint\_override) | Google Distributed Cloud Hardware Management API | `string` | `"https://gdchardwaremanagement.googleapis.com/"` | no |
-| <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment | `string` | `"stg"` | no |
-| <a name="input_gke_hub_api_endpoint_override"></a> [gke\_hub\_api\_endpoint\_override](#input\_gke\_hub\_api\_endpoint\_override) | Google Distributed Cloud Edge API | `string` | `"https://gkehub.googleapis.com/"` | no |
+| <a name="input_environment"></a> [environment](#input\_environment) | Deployment environment. Used to build resource names to partition GCP resources if deploying multiple ACP instances into the same project. | `string` | `"stg"` | no |
 | <a name="input_node_location"></a> [node\_location](#input\_node\_location) | default GDCE zone used by CloudBuild | `string` | n/a | yes |
 | <a name="input_project_id"></a> [project\_id](#input\_project\_id) | The Google Cloud Platform (GCP) project id in which the solution resources will be provisioned | `string` | `"cloud-alchemists-sandbox"` | no |
 | <a name="input_project_id_fleet"></a> [project\_id\_fleet](#input\_project\_id\_fleet) | Optional id of GCP project hosting the Google Kubernetes Engine (GKE) fleet or Google Distributed Compute Engine (GDCE) machines. Defaults to the value of 'project\_id'. | `string` | `null` | no |
@@ -219,6 +216,10 @@ No modules.
 | <a name="input_source_of_truth_branch"></a> [source_of_truth_branch](#input\_source\_of\_truth\_branch) | Repository branch containing source of truth cluster intent registry | `string` | n/a | yes |
 | <a name="input_source_of_truth_path"></a> [source_of_truth_path](#input\_source\_of\_truth\_path) | Path to cluster intent registry file in repository | `string` | n/a | yes |
 | <a name="git_secret_id"></a> [git_secret_id](#input\_git\_secret\_id) | Git token to authenticate with source of truth | `string` | n/a | yes |
+| <a name="cluster_creation_timeout"></a> [cluster_creation_timeout](#input\_cluster\_creation\_timeout) | Cloud Build timeout in seconds for cluster creation. This should account for time to create the cluster, configure core services (ConfigSync, Robin, VMRuntime, etc..), and time for any workload configuration needed before the health checks pass. | `number` | 28800 | no |
+| <a name="cluster_creation_max_retries"></a> [cluster_creation_max_retries](#input\_cluster\_creation\_max\_retries) | The maximum number of retries upon cluster creation failure before marking the zone state as CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED | `number` | 0 | no |
+| <a name="default_config_sync_version"></a> [default_config_sync_version](#input\_default\_config\_sync\_version) | Sets a default ConfigSync version to use for provisioned clusters. If left empty, it will not specify a version at the cluster level. If empty, this will either install the fleet configured version or the latest version of ConfigSync. | `string` | "" | no |
+| <a name="opt_in_build_messages"></a> [opt_in_build_messages](#input\_opt\_in\_build\_messages) | Opt in to sending build steps and failure messages to Google. These messages help Google provide support on issues during the provisioning process. | `bool` | false | no |
 
 ### Outputs
 

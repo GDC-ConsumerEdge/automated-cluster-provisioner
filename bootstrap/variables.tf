@@ -120,7 +120,7 @@ variable "git_secret_id" {
   default     = "shyguy-internal-pat"
 }
 
-variable "deploy-zone-active-monitor" {
+variable "deploy_zone_active_monitor" {
   type        = bool
   description = "Whether to deploy Zone Active Monitor cloud function"
   default     = false
@@ -146,20 +146,20 @@ variable "hardware_management_api_endpoint_override" {
   default     = ""
 }
 
-variable "cluster-creation-timeout" {
+variable "cluster_creation_timeout" {
   description = "Cloud Build timeout in seconds for cluster creation. This should account for time to create the cluster, configure core services (ConfigSync, Robin, VMRuntime, etc..), and time for any workload configuration needed before the healthchecks pass."
   default     = "28800"
   type        = number
 }
 
-variable "cluster-creation-max-retries" {
+variable "cluster_creation_max_retries" {
   description = "The maximum number of retries upon cluster creation failure before marking the zone state as CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED"
   default     = "0"
   type        = number
 }
 
 # https://cloud.google.com/kubernetes-engine/enterprise/config-sync/docs/release-notes
-variable "default-config-sync-version" {
+variable "default_config_sync_version" {
   description = "Sets a default ConfigSync version to use for provisioned clusters. If left empty, it will not specify a version at the cluster level. If empty, this will either install the fleet configured version or the latest version of ConfigSync."
   default     = ""
   type        = string

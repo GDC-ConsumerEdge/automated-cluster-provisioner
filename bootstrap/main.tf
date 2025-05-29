@@ -26,9 +26,9 @@ locals {
     { _SOURCE_OF_TRUTH_PATH = var.source_of_truth_path },
     { _GIT_SECRET_ID = var.git_secret_id },
     { _GIT_SECRETS_PROJECT_ID = local.project_id_secrets },
-    { _TIMEOUT_IN_SECONDS = var.cluster-creation-timeout },
-    { _CS_VERSION = var.default-config-sync-version },
-    { _MAX_RETRIES = var.cluster-creation-max-retries },
+    { _TIMEOUT_IN_SECONDS = var.cluster_creation_timeout },
+    { _CS_VERSION = var.default_config_sync_version },
+    { _MAX_RETRIES = var.cluster_creation_max_retries },
     var.skip_identity_service == true ? { _SKIP_IDENTITY_SERVICE = "TRUE" } : {_SKIP_IDENTITY_SERVICE = "FALSE"},
     var.bart_create_bucket == true ? { _BART_CREATE_BUCKET = "TRUE" } : { _BART_CREATE_BUCKET = "FALSE" },
     var.opt_in_build_messages == true ? { _OPT_IN_BUILD_MESSAGES = "TRUE" } : { _OPT_IN_BUILD_MESSAGES = "FALSE" },
@@ -94,7 +94,7 @@ resource "google_cloudbuild_trigger" "create-cluster" {
 
   build {
     substitutions = local.cloud_build_substitions
-    timeout       = "${var.cluster-creation-timeout}s"
+    timeout       = "${var.cluster_creation_timeout}s"
     tags = try(local.cloud_build_inline_create_cluster["tags"], [])
 
     options {
@@ -360,7 +360,7 @@ resource "google_cloudfunctions2_function" "zone-watcher" {
       SOURCE_OF_TRUTH_PATH                     = var.source_of_truth_path
       PROJECT_ID_SECRETS                       = var.project_id_secrets
       GIT_SECRET_ID                            = var.git_secret_id
-      MAX_RETRIES                              = var.cluster-creation-max-retries
+      MAX_RETRIES                              = var.cluster_creation_max_retries
     }
     service_account_email = google_service_account.zone-watcher-agent.email
   }
@@ -461,7 +461,7 @@ resource "google_cloud_scheduler_job" "cluster-watcher-job" {
 
 # Zone Active Metric Ingestion cloud function
 resource "google_cloudfunctions2_function" "zone-active-metric" {
-  count       = var.deploy-zone-active-monitor ? 1 : 0
+  count       = var.deploy_zone_active_monitor ? 1 : 0
   name        = "zone-active-metric-${var.environment}"
   location    = var.region
   description = "zone active metric generator"
@@ -503,7 +503,7 @@ resource "google_cloudfunctions2_function" "zone-active-metric" {
 }
 
 resource "google_cloud_run_service_iam_member" "zone-active-metric-member" {
-  count    = var.deploy-zone-active-monitor ? 1 : 0
+  count    = var.deploy_zone_active_monitor ? 1 : 0
   location = google_cloudfunctions2_function.zone-active-metric[0].location
   service  = google_cloudfunctions2_function.zone-active-metric[0].name
   role     = "roles/run.invoker"
@@ -511,7 +511,7 @@ resource "google_cloud_run_service_iam_member" "zone-active-metric-member" {
 }
 
 resource "google_cloud_scheduler_job" "zone-active-metric-job" {
-  count            = var.deploy-zone-active-monitor ? 1 : 0
+  count            = var.deploy_zone_active_monitor ? 1 : 0
   name             = "zone-active-metric-scheduler-${var.environment}"
   description      = "Trigger the ${google_cloudfunctions2_function.zone-active-metric[0].name}"
   schedule         = "*/10 * * * *" # Run every 10 minutes
