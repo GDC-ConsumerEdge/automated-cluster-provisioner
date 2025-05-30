@@ -1,5 +1,5 @@
 resource "google_logging_metric" "unknown-zones" {
-  name   = "unknown-zones"
+  name   = "unknown-zones-${var.environment}"
   description = "Zones found in the environment, but are not specified as part of cluster intent"
   filter = <<EOT
 (resource.type = "cloud_function"
@@ -28,7 +28,7 @@ EOT
 }
 
 resource "google_logging_metric" "ready-stores" {
-  name   = "ready-stores"
+  name   = "ready-stores-${var.environment}"
   description = "Stores ready for provisioning"
   filter = <<EOT
 (resource.type = "cloud_function"
@@ -57,7 +57,7 @@ EOT
 }
 
 resource "google_logging_metric" "cluster-creation-success" {
-  name   = "cluster-creation-success"
+  name   = "cluster-creation-success-${var.environment}"
   description = "Cluster Creation Success Count"
   filter = <<EOT
 (resource.type="build" textPayload=~"Cluster Creation Succeeded")
@@ -78,7 +78,7 @@ EOT
 }
 
 resource "google_logging_metric" "cluster-creation-failure" {
-  name   = "cluster-creation-failure"
+  name   = "cluster-creation-failure-${var.environment}"
   description = "Cluster Creation Failure Count"
   filter = <<EOT
 (resource.type="build" textPayload=~"Cluster Creation Failed")
@@ -99,7 +99,7 @@ EOT
 }
 
 resource "google_logging_metric" "cluster-modify-success" {
-  name   = "cluster-modify-success"
+  name   = "cluster-modify-success-${var.environment}"
   description = "Cluster Modify Success Count"
   filter = <<EOT
 (resource.type="build" textPayload=~"Cluster Modify Succeeded")
@@ -120,7 +120,7 @@ EOT
 }
 
 resource "google_logging_metric" "cluster-modify-failure" {
-  name   = "cluster-modify-failure"
+  name   = "cluster-modify-failure-${var.environment}"
   description = "Cluster Modify Failure Count"
   filter = <<EOT
 (resource.type="build" textPayload=~"Cluster Modify Failed")
