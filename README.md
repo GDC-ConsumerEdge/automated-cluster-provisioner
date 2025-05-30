@@ -158,14 +158,14 @@ We recommend that cluster intent is validated as part of the PR process for prop
 
 This table describes the metrics available to monitor cluster provisioning.
 
-| Name                     | Type  | Tags         | Description                                                                     |
-| ------------------------ | ----- | ------------ | ------------------------------------------------------------------------------- |
-| unknown-zones            | Count | zone         | Zones found in the environment, but are not specified as part of cluster intent |
-| ready-stores             | Count | store_id     | Store edge zones ready for provisioning                                         |
-| cluster-creation-success | Count | cluster_name | Cluster Creation Success Count                                                  |
-| cluster-creation-failure | Count | cluster_name | Cluster Creation Failure Count                                                  |
-| cluster-modify-success   | Count | cluster_name | Cluster Modify Success Count                                                    |
-| cluster-modify-failure   | Count | cluster_name | Cluster Modify Failure Count                                                    |
+| Name                                    | Type  | Tags         | Description                                                                     |
+| --------------------------------------- | ----- | ------------ | ------------------------------------------------------------------------------- |
+| unknown-zones-${environment}            | Count | zone         | Zones found in the environment, but are not specified as part of cluster intent |
+| ready-stores-${environment}             | Count | store_id     | Store edge zones ready for provisioning                                         |
+| cluster-creation-success-${environment} | Count | cluster_name | Cluster Creation Success Count                                                  |
+| cluster-creation-failure-${environment} | Count | cluster_name | Cluster Creation Failure Count                                                  |
+| cluster-modify-success-${environment}   | Count | cluster_name | Cluster Modify Success Count                                                    |
+| cluster-modify-failure-${environment}   | Count | cluster_name | Cluster Modify Failure Count                                                    |
 
 ### Alerts
 
