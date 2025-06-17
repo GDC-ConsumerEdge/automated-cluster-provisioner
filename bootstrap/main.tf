@@ -160,57 +160,36 @@ resource "google_service_account" "gdce-provisioning-agent" {
   account_id = "gdce-prov-agent-${var.environment}"
 }
 
-resource "google_project_iam_member" "gdce-provisioning-agent-edge-admin" {
+resource "google_project_iam_member" "gdce-provisioning-agent-build-roles" {
+  for_each = toset([
+    "roles/cloudbuild.builds.viewer",
+    "roles/logging.logWriter",
+    "roles/storage.admin",
+  ])
+
+  project = var.project_id
+  role    = each.value
+  member  = google_service_account.gdce-provisioning-agent.member
+}
+
+# Permissions needed for each fleet/cluster project
+resource "google_project_iam_member" "gdce-provisioning-agent-fleet-roles" {
+  for_each = toset([
+    "roles/edgecontainer.admin",
+    "roles/edgenetwork.admin",
+    "roles/gdchardwaremanagement.admin",
+    "roles/gkehub.admin",
+    "roles/gkehub.gatewayAdmin",
+  ])
+
   project = local.project_id_fleet
-  role    = "roles/edgecontainer.admin"
-  member  = google_service_account.gdce-provisioning-agent.member
-}
-
-resource "google_project_iam_member" "gdce-provisioning-agent-edgenetwork-admin" {
-  project = local.project_id_fleet
-  role    = "roles/edgenetwork.admin"
-  member  = google_service_account.gdce-provisioning-agent.member
-}
-
-resource "google_project_iam_member" "gdce-provisioning-agent-storage-admin" {
-  project = var.project_id
-  role    = "roles/storage.admin"
-  member  = google_service_account.gdce-provisioning-agent.member
-}
-
-resource "google_project_iam_member" "gdce-provisioning-agent-log-writer" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = google_service_account.gdce-provisioning-agent.member
-}
-
-resource "google_project_iam_member" "gdce-provisioning-agent-build-viewer" {
-  project = var.project_id
-  role    = "roles/cloudbuild.builds.viewer"
+  role    = each.value
   member  = google_service_account.gdce-provisioning-agent.member
 }
 
 resource "google_project_iam_member" "gdce-provisioning-agent-secret-accessor" {
   project = local.project_id_secrets
   role    = "roles/secretmanager.secretAccessor"
-  member  = google_service_account.gdce-provisioning-agent.member
-}
-
-resource "google_project_iam_member" "gdce-provisioning-agent-hub-admin" {
-  project = local.project_id_fleet
-  role    = "roles/gkehub.admin"
-  member  = google_service_account.gdce-provisioning-agent.member
-}
-
-resource "google_project_iam_member" "gdce-provisioning-agent-hub-gateway" {
-  project = local.project_id_fleet
-  role    = "roles/gkehub.gatewayAdmin"
-  member  = google_service_account.gdce-provisioning-agent.member
-}
-
-resource "google_project_iam_member" "gdce-provisioning-agent-hardware-management-admin" {
-  project = local.project_id_fleet
-  role    = "roles/gdchardwaremanagement.admin"
   member  = google_service_account.gdce-provisioning-agent.member
 }
 
@@ -241,21 +220,33 @@ resource "google_service_account" "zone-watcher-agent" {
   display_name = "Zone Watcher Service Account"
 }
 
-resource "google_project_iam_member" "zone-watcher-agent-storage-admin" {
+resource "google_project_iam_member" "zone-watcher-agent-run-roles" {
+  for_each = toset([
+    "roles/cloudbuild.builds.editor",
+  ])
+
   project = var.project_id
-  role    = "roles/storage.admin"
+  role    = each.value
   member  = google_service_account.zone-watcher-agent.member
 }
 
-resource "google_project_iam_member" "zone-watcher-agent-cloud-build-editor" {
-  project = var.project_id
-  role    = "roles/cloudbuild.builds.editor"
+# Permissions needed for each fleet/cluster project
+resource "google_project_iam_member" "zone-watcher-agent-fleet-roles" {
+  for_each = toset([
+    "roles/edgecontainer.viewer",
+    "roles/edgenetwork.viewer",
+    "roles/gkehub.viewer",
+    "roles/gdchardwaremanagement.reader",
+  ])
+
+  project = local.project_id_fleet
+  role    = each.value
   member  = google_service_account.zone-watcher-agent.member
 }
 
-resource "google_project_iam_member" "zone-watcher-agent-fleet-viewer" {
-  project = var.project_id
-  role    = "roles/gkehub.viewer"
+resource "google_project_iam_member" "zone-watcher-agent-secret-accessor" {
+  project = local.project_id_secrets
+  role    = "roles/secretmanager.secretAccessor"
   member  = google_service_account.zone-watcher-agent.member
 }
 
@@ -271,57 +262,21 @@ resource "google_service_account_iam_member" "gdce-provisioning-agent-impersonat
   member             = "serviceAccount:${google_service_account.zone-watcher-agent.email}"
 }
 
-resource "google_project_iam_member" "zone-watcher-agent-secret-accessor" {
-  project = local.project_id_secrets
-  role    = "roles/secretmanager.secretAccessor"
-  member  = google_service_account.zone-watcher-agent.member
-}
-
-resource "google_project_iam_member" "zone-watcher-agent-edge-viewer" {
-  project = local.project_id_fleet
-  role    = "roles/edgecontainer.viewer"
-  member  = google_service_account.zone-watcher-agent.member
-}
-
-resource "google_project_iam_member" "zone-watcher-agent-hardware-management-reader" {
-  project = local.project_id_fleet
-  role    = "roles/gdchardwaremanagement.reader"
-  member  = google_service_account.zone-watcher-agent.member
-}
 
 resource "google_service_account" "zone-watcher-builder" {
   account_id   = "zone-watcher-builder-${var.environment}"
   display_name = "Zone Watcher Builder Service Account"
 }
 
-resource "google_project_iam_member" "zone-watcher-builder-object-viewer" {
+resource "google_project_iam_member" "zone-watcher-builder-roles" {
+  for_each = toset([
+    "roles/artifactregistry.writer",
+    "roles/logging.logWriter",
+  ])
+
   project = var.project_id
-  role    = "roles/storage.objectViewer"
+  role    = each.value
   member  = google_service_account.zone-watcher-builder.member
-}
-
-resource "google_project_iam_member" "zone-watcher-builder-log-writer" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = google_service_account.zone-watcher-builder.member
-}
-
-resource "google_project_iam_member" "zone-watcher-builder-registry-writer" {
-  project = var.project_id
-  role    = "roles/artifactregistry.writer"
-  member  = google_service_account.zone-watcher-builder.member
-}
-
-# Image pulling from artifact registry
-
-resource "google_service_account" "image-puller-agent" {
-  account_id = "image-puller-${var.environment}"
-}
-
-resource "google_project_iam_member" "image-puller-agent-artifactregistry-reader" {
-  project = var.project_id
-  role    = "roles/artifactregistry.reader"
-  member  = google_service_account.image-puller-agent.member
 }
 
 # zone-watcher cloud function
