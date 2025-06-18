@@ -282,7 +282,7 @@ steps:
       if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] && gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
       log_build_step "Creating cluster with Group RBAC"
         out=$(
-          gcloud alpha edge-cloud container clusters create $CLUSTER_NAME \
+          gcloud edge-cloud container clusters create $CLUSTER_NAME \
             --control-plane-node-location=$NODE_LOCATION \
             --control-plane-node-count=$NODE_COUNT \
             --cluster-ipv4-cidr=$CLUSTER_IPV4_CIDR \
