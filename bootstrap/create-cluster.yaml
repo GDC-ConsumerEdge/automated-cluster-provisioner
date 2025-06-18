@@ -181,24 +181,24 @@ steps:
       fi
 
       if [[ "$required_version" =~ $regex ]]; then
-          target_numeric="${BASH_REMATCH[1]}"
+          required_numeric="${BASH_REMATCH[1]}"
       else
           echo "Error Could not extract numeric part from target version: '$required_version'. Should be in the format X.Y.X, like 1.8.0." >&2
           return 1 
       fi
 
-      if [[ "$current_numeric" == "$target_numeric" ]]; then
+      if [[ "$current_numeric" == "$required_numeric" ]]; then
           return 0 # Versions are equal
       fi
 
-      first_sorted_version=$(printf "%s\n%s\n" "$current_numeric" "$target_numeric" | sort -V | head -n1)
+      first_sorted_version=$(printf "%s\n%s\n" "$current_numeric" "$required_numeric" | sort -V | head -n1)
 
 
-      if [[ "$first_sorted_version" == "$target_numeric" ]]; then 
-          # current_version < required_version
+      if [[ "$first_sorted_version" == "$required_numeric" ]]; then 
+          # current_version > required_version
           return  0
       else
-          # required_version > current_version
+          # current_version < required_version
           return 1
       fi
     }
