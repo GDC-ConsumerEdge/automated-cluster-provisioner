@@ -395,14 +395,14 @@ steps:
     gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
         --config=./apply-spec.yaml --project $FLEET_PROJECT_ID
 
-    # Apply old Group RBAC steps cluster version is less than 1.10.0
+    # Apply old Group RBAC steps if cluster version is less than 1.10.0
     if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] &&  ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
       log_build_step "Configuring Group RBAC"
       FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)')
       kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}'
       log_build_step "Group RBAC applied"
     else
-      log_build_step "Skipping Group RBAC setup"
+      log_build_step "Skipping manual Group RBAC setup"
     fi
 
     set +eE
