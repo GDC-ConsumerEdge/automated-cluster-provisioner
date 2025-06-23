@@ -30,6 +30,10 @@ class TestMain(unittest.TestCase):
 
         self.assertTrue(result)
 
+        mock_zone.state = Zone.State.CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED
+        result = main.verify_zone_state("mock_store_id", False)
+        self.assertTrue(result)
+
     @mock.patch('google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient')
     def test_zone_recreation_flag(self, mock_client):
         mock_zone = mock.MagicMock()
