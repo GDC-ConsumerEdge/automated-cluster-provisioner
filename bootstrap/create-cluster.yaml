@@ -164,6 +164,45 @@ steps:
       echo "$output"
     }
 
+    # Use this function to determine if the required version is met. 
+    # Return true if met. Return false if not met. 
+    # This can be used when version checking is important.
+    function gdc_version_evaluate() {
+      current_version="$1"
+      required_version="$2"
+
+      regex='^([0-9]+(\.[0-9]+)*)'
+
+      if [[ "$current_version" =~ $regex ]]; then
+          current_numeric="${BASH_REMATCH[1]}"
+      else
+          echo "Error Could not extract numeric part from current version: '$current_version'. Should be in the format X.Y.X, like 1.8.0." >&2
+          return 1
+      fi
+
+      if [[ "$required_version" =~ $regex ]]; then
+          required_numeric="${BASH_REMATCH[1]}"
+      else
+          echo "Error Could not extract numeric part from target version: '$required_version'. Should be in the format X.Y.X, like 1.8.0." >&2
+          return 1 
+      fi
+
+      if [[ "$current_numeric" == "$required_numeric" ]]; then
+          return 0 # Versions are equal
+      fi
+
+      first_sorted_version=$(printf "%s\n%s\n" "$current_numeric" "$required_numeric" | sort -V | head -n1)
+
+
+      if [[ "$first_sorted_version" == "$required_numeric" ]]; then 
+          # current_version > required_version
+          return  0
+      else
+          # current_version < required_version
+          return 1
+      fi
+    }
+
     [[ -z "${STORE_ID}" ]] && die "STORE_ID not set"
 
     NODE_LOCATION=${ZONE}
@@ -236,11 +275,17 @@ steps:
     if [ $? -eq 0 ]; then
       log_build_step "Cluster already created, skipping to next step."
     else
-      log_build_step "Creating cluster"
-
       # Create a new FD to support stdout,stderr to console + saving to bash variable
       # This is used to output the opid before the operation has completed
       exec 5>&1
+
+      IDENTITY_SERVICE_ARG=""
+      if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] && gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
+        log_build_step "Creating cluster with Group RBAC"
+        IDENTITY_SERVICE_ARG="--enable-google-group-authentication"
+      else
+        log_build_step "Creating cluster"
+      fi
 
       out=$(
         gcloud edge-cloud container clusters create $CLUSTER_NAME \
@@ -254,8 +299,10 @@ steps:
           --project=$FLEET_PROJECT_ID \
           --release-channel=NONE \
           --version $CLUSTER_VERSION \
-          --offline-reboot-ttl=7d 2>&1 | tee /dev/fd/5
-      )
+          --offline-reboot-ttl=7d \
+          ${IDENTITY_SERVICE_ARG} 2>&1 | tee /dev/fd/5
+        )
+      fi
 
       [[ $? -ne 0 ]] && die "Failure from gcloud edge-cloud container clusters" "$out"
 
@@ -338,13 +385,14 @@ steps:
     gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
         --config=./apply-spec.yaml --project $FLEET_PROJECT_ID
 
-    if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]]; then
+    # Apply old Group RBAC steps if cluster version is less than 1.10.0
+    if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] &&  ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
       log_build_step "Configuring Group RBAC"
       FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)')
       kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}'
       log_build_step "Group RBAC applied"
     else
-      log_build_step "Skipping Group RBAC setup"
+      log_build_step "Skipping manual Group RBAC setup"
     fi
 
     set +eE
