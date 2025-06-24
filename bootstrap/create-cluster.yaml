@@ -279,39 +279,29 @@ steps:
       # This is used to output the opid before the operation has completed
       exec 5>&1
 
+      IDENTITY_SERVICE_ARG=""
       if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] && gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
-      log_build_step "Creating cluster with Group RBAC"
-        out=$(
-          gcloud edge-cloud container clusters create $CLUSTER_NAME \
-            --control-plane-node-location=$NODE_LOCATION \
-            --control-plane-node-count=$NODE_COUNT \
-            --cluster-ipv4-cidr=$CLUSTER_IPV4_CIDR \
-            --services-ipv4-cidr=$SERVICES_IPV4_CIDR \
-            --external-lb-ipv4-address-pools=$EXTERNAL_LOAD_BALANCER_IPV4_ADDRESS_POOLS \
-            --control-plane-shared-deployment-policy=ALLOWED \
-            --location=$LOCATION \
-            --project=$FLEET_PROJECT_ID \
-            --release-channel=NONE \
-            --version $CLUSTER_VERSION \
-            --offline-reboot-ttl=7d \
-            --enable-google-group-authentication 2>&1 | tee /dev/fd/5
-          )
+        log_build_step "Creating cluster with Group RBAC"
+        IDENTITY_SERVICE_ARG="--enable-google-group-authentication"
       else
         log_build_step "Creating cluster"
-        out=$(
-            gcloud edge-cloud container clusters create $CLUSTER_NAME \
-              --control-plane-node-location=$NODE_LOCATION \
-              --control-plane-node-count=$NODE_COUNT \
-              --cluster-ipv4-cidr=$CLUSTER_IPV4_CIDR \
-              --services-ipv4-cidr=$SERVICES_IPV4_CIDR \
-              --external-lb-ipv4-address-pools=$EXTERNAL_LOAD_BALANCER_IPV4_ADDRESS_POOLS \
-              --control-plane-shared-deployment-policy=ALLOWED \
-              --location=$LOCATION \
-              --project=$FLEET_PROJECT_ID \
-              --release-channel=NONE \
-              --version $CLUSTER_VERSION \
-              --offline-reboot-ttl=7d 2>&1 | tee /dev/fd/5
-            )
+      fi
+
+      out=$(
+        gcloud edge-cloud container clusters create $CLUSTER_NAME \
+          --control-plane-node-location=$NODE_LOCATION \
+          --control-plane-node-count=$NODE_COUNT \
+          --cluster-ipv4-cidr=$CLUSTER_IPV4_CIDR \
+          --services-ipv4-cidr=$SERVICES_IPV4_CIDR \
+          --external-lb-ipv4-address-pools=$EXTERNAL_LOAD_BALANCER_IPV4_ADDRESS_POOLS \
+          --control-plane-shared-deployment-policy=ALLOWED \
+          --location=$LOCATION \
+          --project=$FLEET_PROJECT_ID \
+          --release-channel=NONE \
+          --version $CLUSTER_VERSION \
+          --offline-reboot-ttl=7d \
+          ${IDENTITY_SERVICE_ARG} 2>&1 | tee /dev/fd/5
+        )
       fi
 
       [[ $? -ne 0 ]] && die "Failure from gcloud edge-cloud container clusters" "$out"
