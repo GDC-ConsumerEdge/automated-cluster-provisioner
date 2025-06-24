@@ -596,7 +596,10 @@ def verify_zone_state(store_id: str, recreate_on_delete: bool) -> bool:
         if cluster can be created or not
     """
     state = get_zone_state(store_id)
-    if state == Zone.State.READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS:
+
+    # READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS, provisioning has not yet been attempted
+    # CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED, provisioning has been attempted and is either in progress or failed
+    if state == Zone.State.READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS or state == Zone.State.CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED :
         logger.info(f'Store is ready for provisioning: "{store_id}"')
         return True
 
