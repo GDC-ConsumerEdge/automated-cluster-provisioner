@@ -19,16 +19,25 @@ from unittest import mock
 from unittest.mock import MagicMock
 
 import flask
+from google.auth import credentials as google_credentials
 from google.cloud import edgecontainer
+
+auth_patch = mock.patch('google.auth.default', autospec=True)
+mock_auth = auth_patch.start()
+mock_credentials = mock.MagicMock(spec=google_credentials.Credentials)
+mock_project_id = "mock-project"
+mock_auth.return_value = (mock_credentials, mock_project_id)
 
 from src import main
 from src.main import Zone
 from src.main import WatcherParameters
 
+auth_patch.stop()
 
 class TestWatcherIntegration(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('RUN_PERF_TEST'), "Skipping perf test")
+    @mock.patch('google.auth')
     @mock.patch("src.main.get_zone")
     @mock.patch("google.cloud.devtools.cloudbuild.CloudBuildClient")
     @mock.patch("google.cloud.edgecontainer.EdgeContainerClient")
@@ -40,7 +49,8 @@ class TestWatcherIntegration(unittest.TestCase):
         mock_read_intent_data,
         mock_ec_client,
         mock_cb_client,
-        mock_get_zone
+        mock_get_zone,
+        mock_auth
     ):
         """
         Tests the zone_watcher function with variable number of projects, regions, and zones.
@@ -103,6 +113,7 @@ class TestWatcherIntegration(unittest.TestCase):
         mock_get_zone.assert_any_call('projects/project-9/locations/region-4/zones/store50')
 
     @unittest.skipUnless(os.environ.get('RUN_PERF_TEST'), "Skipping perf test")
+    @mock.patch('google.auth')
     @mock.patch("src.main.get_zone")
     @mock.patch("google.cloud.devtools.cloudbuild.CloudBuildClient")
     @mock.patch("google.cloud.edgenetwork.EdgeNetworkClient")
@@ -116,7 +127,8 @@ class TestWatcherIntegration(unittest.TestCase):
         mock_ec_client,
         mock_en_client,
         mock_cb_client,
-        mock_get_zone
+        mock_get_zone,
+        mock_auth
     ):
         """
         Tests the cluster_watcher function with variable number of projects, regions, and zones.
