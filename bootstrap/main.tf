@@ -272,6 +272,7 @@ resource "google_project_iam_member" "zone-watcher-builder-roles" {
   for_each = toset([
     "roles/artifactregistry.writer",
     "roles/logging.logWriter",
+    "roles/storage.objectViewer"
   ])
 
   project = var.project_id
