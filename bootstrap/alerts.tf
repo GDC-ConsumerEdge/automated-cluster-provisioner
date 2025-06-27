@@ -34,7 +34,7 @@ resource "google_monitoring_alert_policy" "cluster-creation-failure-alert" {
     display_name = "Cluster Creation Failure Alert"
     condition_prometheus_query_language {
       query = <<EOL
-      count(rate(logging_googleapis_com:user_cluster_creation_failure_${var.environment}{monitored_resource="cloud_run_revision"}[1h])) by (cluster_name) > 0
+      count(rate(logging_googleapis_com:user_cluster_creation_failure_${var.environment}{monitored_resource="build"}[1h])) by (cluster_name) > 0
         EOL
       
       duration = "3600s"
@@ -56,7 +56,7 @@ resource "google_monitoring_alert_policy" "cluster-modify-failure-alert" {
     display_name = "Cluster Modify Failure Alert"
     condition_prometheus_query_language {
       query = <<EOL
-      count(rate(logging_googleapis_com:user_cluster_modify_failure_${var.environment}{monitored_resource="cloud_run_revision"}[1h])) by (cluster_name) > 0
+      count(rate(logging_googleapis_com:user_cluster_modify_failure_${var.environment}{monitored_resource="build"}[1h])) by (cluster_name) > 0
         EOL
       
       duration = "3600s"
