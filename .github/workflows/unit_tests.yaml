@@ -1,0 +1,19 @@
+name: Unit Tests
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+run-name: run-unit-tests
+
+jobs:
+  run-unit-tests:
+    runs-on: ubuntu-latest
+    steps: 
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12' 
+      - name: run validator
+        run: |
+          cd watchers
+          python3 -m pip install -r src/requirements.txt
+          python3 -m unittest

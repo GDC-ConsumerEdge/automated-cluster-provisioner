@@ -14,11 +14,22 @@
 
 import unittest
 from unittest import mock
-from src import main
+from google.auth import credentials as google_credentials
 from google.cloud.gdchardwaremanagement_v1alpha import Zone
 
+import google.auth
+auth_patch = mock.patch('google.auth.default', autospec=True)
+mock_auth = auth_patch.start()
+mock_credentials = mock.MagicMock(spec=google_credentials.Credentials)
+mock_project_id = "mock-project"
+mock_auth.return_value = (mock_credentials, mock_project_id)
+
+from src import main
+
+auth_patch.stop()
+
 class TestMain(unittest.TestCase):
-    
+
     @mock.patch('google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient')
     def test_zone_ready_for_provisioning(self, mock_client):
         mock_zone = mock.MagicMock()
@@ -28,6 +39,10 @@ class TestMain(unittest.TestCase):
 
         result = main.verify_zone_state("mock_store_id", False)
 
+        self.assertTrue(result)
+
+        mock_zone.state = Zone.State.CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED
+        result = main.verify_zone_state("mock_store_id", False)
         self.assertTrue(result)
 
     @mock.patch('google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient')
@@ -42,7 +57,6 @@ class TestMain(unittest.TestCase):
 
         result = main.verify_zone_state("mock_store_id", True)
         self.assertTrue(result)
-
 
     @mock.patch('google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient')
     def test_zone_preparing(self, mock_client):
