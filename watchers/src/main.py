@@ -614,7 +614,7 @@ def get_zone_state(store_id: str) -> Zone.State:
     """
     return get_zone(store_id).state
 
-def get_zone_cluster_intent_presence(store_id: str) -> Zone.cluster_intent_verified:
+def get_zone_cluster_intent_presence(store_id: str) -> bool:
     '''Return Zone info.
     Args:
       store_id: name of zone which is store id usually

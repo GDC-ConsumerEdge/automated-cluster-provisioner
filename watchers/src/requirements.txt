@@ -4,7 +4,7 @@ google-cloud-build==3.24.2
 google-cloud-compute==1.19.2
 google-cloud-edgecontainer==0.5.11
 google-cloud-edgenetwork==0.1.10
-google-cloud-gdchardwaremanagement==0.1.12
+google-cloud-gdchardwaremanagement==0.1.13
 google-cloud-gke-hub==1.16.0
 google-cloud-monitoring==2.22.2
 google-cloud-secret-manager==2.20.2
