@@ -19,6 +19,7 @@ import io
 import flask
 import csv
 import logging
+from google.api_core.operation import Operation
 import requests
 import google_crc32c
 from requests.structures import CaseInsensitiveDict
@@ -126,24 +127,34 @@ def zone_watcher(req: flask.Request):
                 )
 
                 try:
-                    if not get_zone_cluster_intent_presence(zone_store_id):
-                        logger.info(
-                            f'Store: {store_id} cluster intent is present but flag is not set. Setting flag to validated cluster intent presence.'
-                        )
-                        operation = set_zone_state_verify_cluster_intent(zone_store_id)
-                        logger.info(f'HW API Operation: {operation.result()}')
+                    print(get_zone(zone_store_id))
+                    print("")
+                    
+                    if get_zone_state(zone_store_id) != Zone.State.ADDITIONAL_INFO_NEEDED:
+                        logger.info(f'Store: {store_id} is not in ADDITIONAL_INFO_NEEDED state. Skipping..')
                         continue
-                    else:
+                    
+                    if not get_zone_cluster_intent_required(zone_store_id):
                         logger.info(
-                            f'Store: {store_id} cluster intent has already been validated'
-                        )
+                            f'Cluster intent is not required for Store: {store_id}. Skipping..')
+                        continue
+                                        
+                    if get_zone_cluster_intent_verified(zone_store_id):
+                        
+                        logger.info(f'Cluster intent is required. Cluster intent is present and Cluster intent verification has already been set for Store: {store_id}. Skipping..')
+                        continue
+                    
+                    logger.info(
+                        f'Cluster intent is required. Cluster intent is present but Cluster intent verification is not set on Store: {store_id}. Setting cluster intent verification flag.')
+                    operation = set_zone_state_verify_cluster_intent(zone_store_id)
+                    logger.info(f'HW API Operation: {operation.operation.name}')
                 except:
                     logger.error(
-                        f'Zone for store {store_id} could not validate cluster intent presence.',
+                        f'Cluster intent could not be checked for Store: {store_id}. Skipping',
                         exc_info=True,
                     )
                     continue
-            
+    print("here")
     edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
     if edgecontainer_api_endpoint_override:
         op = client_options.ClientOptions(api_endpoint=urlparse(edgecontainer_api_endpoint_override).netloc)
@@ -614,17 +625,26 @@ def get_zone_state(store_id: str) -> Zone.State:
     """
     return get_zone(store_id).state
 
-def get_zone_cluster_intent_presence(store_id: str) -> bool:
+def get_zone_cluster_intent_required(store_id: str) -> bool:
     '''Return Zone info.
     Args:
       store_id: name of zone which is store id usually
     Returns:
       bool
     '''
+    return get_zone(store_id).cluster_intent_required
+
+def get_zone_cluster_intent_verified(store_id: str) -> bool:
+    '''Return Zone info.
+    Args:
+      store_id: name of zone which is store id usually
+    Returns:
+      bool
+    '''
+    
     return get_zone(store_id).cluster_intent_verified
 
-
-def set_zone_state_verify_cluster_intent(store_id: str):
+def set_zone_state_verify_cluster_intent(store_id: str) -> Operation:
     '''Return Zone info.
     Args:
       store_id: name of zone which is store id usually
@@ -647,7 +667,6 @@ def set_zone_state_verify_cluster_intent(store_id: str):
         name=store_id,
         state_signal=SignalZoneStateRequest.StateSignal.VERIFY_CLUSTER_INTENT_PRESENCE,
     )
-
     return client.signal_zone_state(request=request)
 
 
