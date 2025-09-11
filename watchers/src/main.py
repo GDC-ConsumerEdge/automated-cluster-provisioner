@@ -127,13 +127,6 @@ def zone_watcher(req: flask.Request):
                 )
 
                 try:
-                    print(get_zone(zone_store_id))
-                    print("")
-                    
-                    if get_zone_state(zone_store_id) != Zone.State.ADDITIONAL_INFO_NEEDED:
-                        logger.info(f'Store: {store_id} is not in ADDITIONAL_INFO_NEEDED state. Skipping..')
-                        continue
-                    
                     if not get_zone_cluster_intent_required(zone_store_id):
                         logger.info(
                             f'Cluster intent is not required for Store: {store_id}. Skipping..')
@@ -154,7 +147,7 @@ def zone_watcher(req: flask.Request):
                         exc_info=True,
                     )
                     continue
-    print("here")
+    
     edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
     if edgecontainer_api_endpoint_override:
         op = client_options.ClientOptions(api_endpoint=urlparse(edgecontainer_api_endpoint_override).netloc)
