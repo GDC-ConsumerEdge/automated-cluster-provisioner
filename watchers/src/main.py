@@ -126,19 +126,11 @@ def zone_watcher(req: flask.Request):
                     f'projects/{machine_project}/locations/{location}/zones/{store_id}'
                 )
 
-                try:
-                    if not get_zone_cluster_intent_required(zone_store_id):
-                        logger.info(
-                            f'Cluster intent is not required for Store: {store_id}. Skipping..')
-                        continue
-                                        
+                try:                                       
                     if get_zone_cluster_intent_verified(zone_store_id):
-                        
-                        logger.info(f'Cluster intent is required. Cluster intent is present and Cluster intent verification has already been set for Store: {store_id}. Skipping..')
+                        logger.info(f'Cluster intent is present and verification has already been set for Store: {store_id}. Skipping..')
                         continue
-                    
-                    logger.info(
-                        f'Cluster intent is required. Cluster intent is present but Cluster intent verification is not set on Store: {store_id}. Setting cluster intent verification flag.')
+                    logger.info(f'Cluster intent is present but verification is not set on Store: {store_id}. Setting cluster intent verification.')
                     operation = set_zone_state_verify_cluster_intent(zone_store_id)
                     logger.info(f'HW API Operation: {operation.operation.name}')
                 except:
@@ -617,15 +609,6 @@ def get_zone_state(store_id: str) -> Zone.State:
       zone state
     """
     return get_zone(store_id).state
-
-def get_zone_cluster_intent_required(store_id: str) -> bool:
-    '''Return Zone info.
-    Args:
-      store_id: name of zone which is store id usually
-    Returns:
-      bool
-    '''
-    return get_zone(store_id).cluster_intent_required
 
 def get_zone_cluster_intent_verified(store_id: str) -> bool:
     '''Return Zone info.
