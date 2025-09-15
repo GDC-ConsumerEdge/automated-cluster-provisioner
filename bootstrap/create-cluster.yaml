@@ -131,13 +131,16 @@ steps:
 
       operation_id=$(echo $out | jq -r .name)
       URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${operation_id}"
-      count=0
-      max_retries=10
-      while [[ ${count} -lt ${max_retries} ]]; do
+      signal_attempts=0
+      max_retries_for_signal_completion=10
+      while [[ ${signal_attempts} -lt ${max_retries_for_signal_completion} ]]; do
         is_completed=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             "${URI}" | jq -r .done)
         [[ "${is_completed}" != "false" ]] && break
+        sleep 5
+        ((signal_attempts++))
       done
+      [[ ${signal_attempts} -ge ${max_retries_for_signal_completion} ]] && die "Signal operation timed out"
     }
 
     function parse_csv_required() {
@@ -399,15 +402,15 @@ steps:
 
     if [ -z "${SKIP_HEALTH_CHECK}" ]; then
       count=0
-      max_retries=240 # 1200s/20min
+      max_retries_for_healthcheck_creation=240 # 1200s/20min
       log_build_step "Waiting for health check resource to be created"
-      while [[ ${count} -lt ${max_retries} ]]; do
+      while [[ ${count} -lt ${max_retries_for_healthcheck_creation} ]]; do
         kubectl get healthchecks.validator.gdc.gke.io/default >/dev/null 2>&1 && break
         echo -n .
         sleep 5
         ((count++))
       done
-      [[ ${count} -ge ${max_retries} ]] && die "Health check resource not created after 20min"
+      [[ ${count} -ge ${max_retries_for_healthcheck_creation} ]] && die "Health check resource not created after 20min"
 
       log_build_step "Waiting for platform healthchecks to pass"
       kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy \
