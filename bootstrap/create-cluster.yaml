@@ -140,7 +140,12 @@ steps:
         sleep 5
         ((signal_attempts++))
       done
-      [[ ${signal_attempts} -ge ${max_retries_for_signal_completion} ]] && die "Signal operation timed out"
+      
+      if [[ ${signal_attempts} -ge ${max_retries_for_signal_completion} ]]; then
+        die "Signal operation timed out"
+      else
+        return 0
+      fi
     }
 
     function parse_csv_required() {
