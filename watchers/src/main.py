@@ -19,6 +19,7 @@ import io
 import flask
 import csv
 import logging
+from google.api_core.operation import Operation
 import requests
 import google_crc32c
 from requests.structures import CaseInsensitiveDict
@@ -31,7 +32,7 @@ from google.cloud import edgenetwork
 from google.cloud import secretmanager
 from google.cloud import gdchardwaremanagement_v1alpha
 from google.cloud import gkehub_v1
-from google.cloud.gdchardwaremanagement_v1alpha import Zone
+from google.cloud.gdchardwaremanagement_v1alpha import Zone, SignalZoneStateRequest
 from google.cloud.devtools import cloudbuild
 from google.cloud import monitoring_v3
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -115,7 +116,30 @@ def zone_watcher(req: flask.Request):
     logger.info(f'Running zone watcher for: proj_id={params.project_id},sot={params.source_of_truth_repo}/{params.source_of_truth_branch}/{params.source_of_truth_path}, cb_trigger={params.cloud_build_trigger}')
     
     config_zone_info = read_intent_data(params, 'machine_project_id')
+    for proj_loc_key in config_zone_info:
+            (machine_project, location) = proj_loc_key
 
+            for store_id in config_zone_info[proj_loc_key]:
+                store_info = config_zone_info[proj_loc_key][store_id]
+
+                zone_store_id = (
+                    f'projects/{machine_project}/locations/{location}/zones/{store_id}'
+                )
+
+                try:                                       
+                    if get_zone_cluster_intent_verified(zone_store_id):
+                        logger.info(f'Cluster intent is present and verification has already been set for Store: {store_id}. Skipping..')
+                        continue
+                    logger.info(f'Cluster intent is present but verification is not set on Store: {store_id}. Setting cluster intent verification.')
+                    operation = set_zone_state_verify_cluster_intent(zone_store_id)
+                    logger.info(f'HW API Operation: {operation.operation.name}')
+                except:
+                    logger.error(
+                        f'Cluster intent could not be checked for Store: {store_id}. Skipping',
+                        exc_info=True,
+                    )
+                    continue
+    
     edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
     if edgecontainer_api_endpoint_override:
         op = client_options.ClientOptions(api_endpoint=urlparse(edgecontainer_api_endpoint_override).netloc)
@@ -585,6 +609,41 @@ def get_zone_state(store_id: str) -> Zone.State:
       zone state
     """
     return get_zone(store_id).state
+
+def get_zone_cluster_intent_verified(store_id: str) -> bool:
+    '''Return Zone info.
+    Args:
+      store_id: name of zone which is store id usually
+    Returns:
+      bool
+    '''
+    
+    return get_zone(store_id).cluster_intent_verified
+
+def set_zone_state_verify_cluster_intent(store_id: str) -> Operation:
+    '''Return Zone info.
+    Args:
+      store_id: name of zone which is store id usually
+    '''
+
+    hardware_management_api_endpoint_override = os.environ.get(
+        'HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE'
+    )
+    if hardware_management_api_endpoint_override:
+        op = client_options.ClientOptions(
+            api_endpoint=urlparse(hardware_management_api_endpoint_override).netloc
+        )
+        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient(
+            client_options=op
+        )
+    else:
+        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient()
+
+    request = gdchardwaremanagement_v1alpha.SignalZoneStateRequest(
+        name=store_id,
+        state_signal=SignalZoneStateRequest.StateSignal.VERIFY_CLUSTER_INTENT_PRESENCE,
+    )
+    return client.signal_zone_state(request=request)
 
 
 def verify_zone_state(store_id: str, recreate_on_delete: bool) -> bool:

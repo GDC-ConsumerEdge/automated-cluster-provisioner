@@ -67,3 +67,35 @@ class TestMain(unittest.TestCase):
 
         result = main.verify_zone_state("mock_store_id", False)
         self.assertFalse(result)
+        
+    @mock.patch(
+        "google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient")
+    def test_get_zone_cluster_intent_verified_false(self, mock_client):
+        mock_zone = mock.MagicMock()
+        mock_zone.cluster_intent_verified = False
+
+        mock_client.return_value.get_zone.return_value = mock_zone
+
+        result = main.get_zone_cluster_intent_verified("mock_store_id")
+        self.assertFalse(result)
+
+    @mock.patch(
+        "google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient")
+    def test_get_zone_cluster_intent_verified_true(self, mock_client):
+        mock_zone = mock.MagicMock()
+        mock_zone.cluster_intent_verified = True
+
+        mock_client.return_value.get_zone.return_value = mock_zone
+
+        result = main.get_zone_cluster_intent_verified("mock_store_id")
+        self.assertTrue(result)
+
+    @mock.patch(
+        "google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient")
+    def test_set_zone_state_verify_cluster_intent(self, mock_client):
+        mock_operation = mock.MagicMock()
+        mock_client.return_value.signal_zone_state.return_value = mock_operation
+
+        result = main.set_zone_state_verify_cluster_intent("mock_store_id")
+        self.assertEqual(result, mock_operation)
+        mock_client.return_value.signal_zone_state.assert_called_once()
