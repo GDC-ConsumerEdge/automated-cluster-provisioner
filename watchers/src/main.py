@@ -17,6 +17,7 @@ import functions_framework
 import os
 import io
 import flask
+from collections import defaultdict
 import csv
 import logging
 from google.api_core.operation import Operation
@@ -24,12 +25,11 @@ import requests
 import google_crc32c
 from requests.structures import CaseInsensitiveDict
 from urllib.parse import urlparse
-from google.api_core import client_options, exceptions
+from google.api_core import exceptions
 import google.auth
 import google.auth.transport.requests
 from google.cloud import edgecontainer
 from google.cloud import edgenetwork
-from google.cloud import secretmanager
 from google.cloud import gdchardwaremanagement_v1alpha
 from google.cloud import gkehub_v1
 from google.cloud.gdchardwaremanagement_v1alpha import Zone, SignalZoneStateRequest
@@ -39,11 +39,16 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from dateutil.parser import parse
 from .maintenance_windows import MaintenanceExclusionWindow
 from .build_history import BuildHistory
+from .acp_zone_collection import ACPZoneCollection, ACPZone
+from .clients import GoogleClients
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 creds, auth_project = google.auth.default()
+
+zones: ACPZoneCollection = None
+clients = GoogleClients()
 
 @dataclass
 class WatcherParameters:
@@ -108,9 +113,16 @@ def get_parameters_from_environment():
         max_retries=max_retries
     )
 
+def reset_zone_cache():
+    """
+    Method to reset zone cache on each cloud function invocation
+    """
+    global zones
+    zones = ACPZoneCollection()
 
 @functions_framework.http
 def zone_watcher(req: flask.Request):
+    reset_zone_cache()
     params = get_parameters_from_environment()
 
     logger.info(f'Running zone watcher for: proj_id={params.project_id},sot={params.source_of_truth_repo}/{params.source_of_truth_branch}/{params.source_of_truth_path}, cb_trigger={params.cloud_build_trigger}')
@@ -140,13 +152,8 @@ def zone_watcher(req: flask.Request):
                     )
                     continue
     
-    edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
-    if edgecontainer_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(edgecontainer_api_endpoint_override).netloc)
-        ec_client = edgecontainer.EdgeContainerClient(client_options=op)
-    else:  # use the default prod endpoint
-        ec_client = edgecontainer.EdgeContainerClient()
-    cb_client = cloudbuild.CloudBuildClient()
+    ec_client = clients.get_edgecontainer_client()
+    cb_client = clients.get_cloudbuild_client()
 
     builds = BuildHistory(params.project_id, params.region, params.max_retries, params.cloud_build_trigger_name)
 
@@ -257,6 +264,7 @@ def zone_watcher(req: flask.Request):
 
 @functions_framework.http
 def cluster_watcher(req: flask.Request):
+    reset_zone_cache()
     params = get_parameters_from_environment()
 
     logger.info(f'proj_id = {params.project_id}')
@@ -264,29 +272,10 @@ def cluster_watcher(req: flask.Request):
 
     config_zone_info = read_intent_data(params, 'fleet_project_id')
 
-    edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
-    edgenetwork_api_endpoint_override = os.environ.get("EDGE_NETWORK_API_ENDPOINT_OVERRIDE")
-    gkehub_api_endpoint_override = os.environ.get("GKEHUB_API_ENDPOINT_OVERRIDE")
-
-    if edgecontainer_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(edgecontainer_api_endpoint_override).netloc)
-        ec_client = edgecontainer.EdgeContainerClient(client_options=op)
-    else:  # use the default prod endpoint
-        ec_client = edgecontainer.EdgeContainerClient()
-
-    if edgenetwork_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(edgenetwork_api_endpoint_override).netloc)
-        en_client = edgenetwork.EdgeNetworkClient(client_options=op)
-    else:  # use the default prod endpoint
-        en_client = edgenetwork.EdgeNetworkClient()
-
-    if gkehub_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(gkehub_api_endpoint_override).netloc)
-        gkehub_client = gkehub_v1.GkeHubClient(client_options=op)
-    else:  # use the default prod endpoint
-        gkehub_client = gkehub_v1.GkeHubClient()
-
-    cb_client = cloudbuild.CloudBuildClient()
+    ec_client = clients.get_edgecontainer_client()
+    en_client = clients.get_edgenetwork_client()
+    gkehub_client = clients.get_gkehub_client()
+    cb_client = clients.get_cloudbuild_client()
 
     count = 0
     for proj_loc_key in config_zone_info:
@@ -301,7 +290,9 @@ def cluster_watcher(req: flask.Request):
         
         try:
             res_pager_c = ec_client.list_clusters(req_c)
-            clusters = [c for c in res_pager_c]  # all the clusters in the location
+            clusters_by_zone = defaultdict(list)
+            for c in res_pager_c:
+                clusters_by_zone[c.control_plane.local.node_location].append(c)
         except Exception as err:
             logger.error(f"Error listing clusters for project: {project_id}, location: {location}")
             logger.error(err)
@@ -322,8 +313,7 @@ def cluster_watcher(req: flask.Request):
                 continue
 
             # filter the cluster in the GDCE zone, should be at most 1
-            zone_cluster_list = [c for c in clusters if c.control_plane.local.node_location
-                                 == zone]
+            zone_cluster_list = clusters_by_zone[zone]
             if len(zone_cluster_list) == 0:
                 logger.warning(f'No lcp cluster found in {zone}')
                 continue
@@ -446,6 +436,7 @@ def cluster_watcher(req: flask.Request):
 
 @functions_framework.http
 def zone_active_metric(req: flask.Request):
+    reset_zone_cache()
     params = get_parameters_from_environment()
 
     logger.info(
@@ -523,7 +514,7 @@ def zone_active_metric(req: flask.Request):
         time_series_data.append(time_series_point)
 
     # send batch requests to metric
-    m_client = monitoring_v3.MetricServiceClient()
+    m_client = clients.get_monitoring_client()
     batch_size = 200
     for i in range(0, len(time_series_data), batch_size):
         request = monitoring_v3.CreateTimeSeriesRequest({
@@ -574,21 +565,14 @@ def read_intent_data(params, named_key):
     
     return config_zone_info
 
-def get_zone(store_id: str) -> Zone:
+def get_zone(store_id: str) -> ACPZone:
     """Return Zone info.
     Args:
       store_id: name of zone which is store id usually
     Returns:
-      Zone object
+      ACPZone object
     """
-    hardware_management_api_endpoint_override = os.environ.get('HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE')
-    if hardware_management_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(hardware_management_api_endpoint_override).netloc)
-        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient(client_options=op)
-    else:
-        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient()
-
-    return client.get_zone(name=store_id)
+    return zones.get_zone(store_id)
 
 
 def get_zone_name(store_id: str) -> str:
@@ -625,19 +609,7 @@ def set_zone_state_verify_cluster_intent(store_id: str) -> Operation:
     Args:
       store_id: name of zone which is store id usually
     '''
-
-    hardware_management_api_endpoint_override = os.environ.get(
-        'HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE'
-    )
-    if hardware_management_api_endpoint_override:
-        op = client_options.ClientOptions(
-            api_endpoint=urlparse(hardware_management_api_endpoint_override).netloc
-        )
-        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient(
-            client_options=op
-        )
-    else:
-        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient()
+    client = clients.get_hardware_management_client()
 
     request = gdchardwaremanagement_v1alpha.SignalZoneStateRequest(
         name=store_id,
@@ -749,7 +721,7 @@ class ClusterIntentReader:
 
 
 def get_git_token_from_secrets_manager(secrets_project_id, secret_id, version_id="latest"):
-    client = secretmanager.SecretManagerServiceClient()
+    client = clients.get_secret_manager_client()
 
     name = f"projects/{secrets_project_id}/secrets/{secret_id}/versions/{version_id}"
 

@@ -370,7 +370,7 @@ resource "google_cloudfunctions2_function" "cluster-watcher" {
 
   service_config {
     max_instance_count = 1
-    available_memory   = "256M"
+    available_memory   = "512M"
     timeout_seconds    = 60
     environment_variables = {
       GOOGLE_CLOUD_PROJECT                     = var.project_id,
