@@ -19,7 +19,7 @@ class GoogleClients:
         edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
         edgenetwork_api_endpoint_override = os.environ.get("EDGE_NETWORK_API_ENDPOINT_OVERRIDE")
         gkehub_api_endpoint_override = os.environ.get("GKEHUB_API_ENDPOINT_OVERRIDE")
-        hardware_management_api_endpoint_override = os.environ.get("HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE")
+        hardware_management_api_endpoint_override = os.environ.get("HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE")
 
         if edgecontainer_api_endpoint_override:
             op = client_options.ClientOptions(api_endpoint=urlparse(edgecontainer_api_endpoint_override).netloc)
