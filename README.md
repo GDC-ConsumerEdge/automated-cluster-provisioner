@@ -112,11 +112,21 @@ This will deploy all the GCP resources for the automated cluster provisioning so
 
 ## Usage
 
-Once the solution is deployed, most usage interaction is expected to happen through the cluster intent data csv file. An example can be found [here](./example-source-of-truth.csv), where each row is one cluster for a given location. The expected sequence would be:
+With the Automated Cluster Provisioning (ACP) solution, users can provision clusters on their GDC Edge Zones by setting cluster parameters in a cluster intent CSV file and having the ACP solution trigger provisioning once the edge zone is prepared and online. An example of cluster intent can be found [here](./example-source-of-truth.csv), where each row is one cluster for a store location.
 
-1) In a GCP project, place an [order](https://cloud.google.com/distributed-cloud/edge/latest/docs/reference/hardware/rest/v1alpha/projects.locations.orders/create) through the UI or API. This will generate a corresponding [Zone](https://cloud.google.com/distributed-cloud/edge/latest/docs/reference/hardware/rest/v1alpha/projects.locations.zones/get) resource.
-2) Add a new line into the cluster intent data csv file filling out `store_id`, `machine_project_id`, and `location` as the key to find the appropriate edge zone. Then fill out all the other required parameters in the CSV file.
-3) Wait for the next reconciliation loop... and done! If this is a new cluster, you'll see a new Cloud Build job which contains the provisioning logic. 
+> [!IMPORTANT]  
+> The Cluster Intent CSV file is set up and managed by the user. It is not stored or managed by Google. 
+
+The expected sequence to order a GDC Edge Zone with a provisioned cluster would be:
+
+1) In a GCP project, place an [order](https://cloud.google.com/distributed-cloud/edge/latest/docs/order) through the UI or API.  
+   - This will generate a [Zone](https://cloud.google.com/distributed-cloud/edge/latest/docs/reference/hardware/rest/v1alpha/projects.locations.zones/get) resource which is used for status tracking.
+2) Fill out the Cluster Intent CSV
+   - Add a new line into the Cluster Intent CSV file filling out `store_id`, `machine_project_id`, and `location` as the key to find the appropriate edge zone. Then fill out all the other required parameters in the CSV file.
+3) Wait for your cluster to be provisioned.
+   - While your hardware is being fulfilled, the ACP solution continuously polls for the Zone's state property to determine if the edge zone is ready for provisioning. Once ready, it will create a cluster using the parameters defined in the Cluster Intent CSV file. No manual action required. 
+4) The Edge Zone is now ready for delivery. 
+
 
 ## Cluster Intent
 
