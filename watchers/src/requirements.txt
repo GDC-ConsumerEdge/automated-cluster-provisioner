@@ -2,12 +2,13 @@ functions-framework==3.*
 google-auth==2.35.0
 google-cloud-build==3.24.2
 google-cloud-compute==1.19.2
-google-cloud-edgecontainer==0.5.11
+google-cloud-edgecontainer==0.5.18
 google-cloud-edgenetwork==0.1.10
 google-cloud-gdchardwaremanagement==0.1.13
 google-cloud-gke-hub==1.16.0
 google-cloud-monitoring==2.22.2
 google-cloud-secret-manager==2.20.2
 google-cloud-storage==2.18.2
+pydantic==2.11.9
 python-dateutil==2.9.0.post0
 protobuf==5.29.5

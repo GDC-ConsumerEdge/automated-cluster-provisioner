@@ -1,5 +1,6 @@
 from dateutil.parser import parse
-from typing import Self
+from typing import MutableSequence, Self
+from google.cloud import edgecontainer
 
 class MaintenanceExclusionWindow:
     def __init__(self, name, start_time, end_time):
@@ -32,15 +33,11 @@ class MaintenanceExclusionWindow:
         return exclusions
 
     @staticmethod
-    def get_exclusion_windows_from_api_response(maintenance_policy) -> set[Self]:
+    def get_exclusion_windows_from_cluster_response(cluster: edgecontainer.Cluster) -> set[Self]:
         exclusions = set()
 
-        if (maintenance_policy and maintenance_policy.get("maintenanceExclusions")):
-            for exclusion in maintenance_policy["maintenanceExclusions"]:
-                name = exclusion["id"]
-                start_time = parse(exclusion["window"]["startTime"])
-                end_time = parse(exclusion["window"]["endTime"])
-
-                exclusions.add(MaintenanceExclusionWindow(name, start_time, end_time))
+        if (cluster and cluster.maintenance_policy and cluster.maintenance_policy.maintenance_exclusions):
+            for exclusion in cluster.maintenance_policy.maintenance_exclusions:
+                exclusions.add(MaintenanceExclusionWindow(exclusion.id, exclusion.window.start_time, exclusion.window.end_time))
 
         return exclusions

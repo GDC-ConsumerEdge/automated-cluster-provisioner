@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 from google.auth import credentials as google_credentials
 from google.cloud.gdchardwaremanagement_v1alpha import Zone
+from src.acp_zone import ACPZone
 
 import google.auth
 auth_patch = mock.patch('google.auth.default', autospec=True)
@@ -30,72 +31,20 @@ auth_patch.stop()
 
 class TestMain(unittest.TestCase):
 
-    @mock.patch('google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient')
-    def test_zone_ready_for_provisioning(self, mock_client):
-        mock_zone = mock.MagicMock()
-        mock_zone.state = Zone.State.READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS
-        
-        mock_client.return_value.get_zone.return_value = mock_zone
-
-        result = main.verify_zone_state("mock_store_id", False)
-
+    def test_zone_ready_for_provisioning(self):
+        result = main.verify_zone_state(Zone.State.READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS, "mock_store_id", False)
         self.assertTrue(result)
 
-        mock_zone.state = Zone.State.CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED
-        result = main.verify_zone_state("mock_store_id", False)
+        result = main.verify_zone_state(Zone.State.CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED, "mock_store_id", False)
         self.assertTrue(result)
 
-    @mock.patch('google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient')
-    def test_zone_recreation_flag(self, mock_client):
-        mock_zone = mock.MagicMock()
-        mock_zone.state = Zone.State.ACTIVE
-
-        mock_client.return_value.get_zone.return_value = mock_zone
-
-        result = main.verify_zone_state("mock_store_id", False)
+    def test_zone_recreation_flag(self):
+        result = main.verify_zone_state(Zone.State.ACTIVE, "mock_store_id", False)
         self.assertFalse(result)
 
-        result = main.verify_zone_state("mock_store_id", True)
+        result = main.verify_zone_state(Zone.State.ACTIVE, "mock_store_id", True)
         self.assertTrue(result)
 
-    @mock.patch('google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient')
-    def test_zone_preparing(self, mock_client):
-        mock_zone = mock.MagicMock()
-        mock_zone.state = Zone.State.PREPARING
-
-        mock_client.return_value.get_zone.return_value = mock_zone
-
-        result = main.verify_zone_state("mock_store_id", False)
+    def test_zone_preparing(self):
+        result = main.verify_zone_state(Zone.State.PREPARING, "mock_store_id", False)
         self.assertFalse(result)
-        
-    @mock.patch(
-        "google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient")
-    def test_get_zone_cluster_intent_verified_false(self, mock_client):
-        mock_zone = mock.MagicMock()
-        mock_zone.cluster_intent_verified = False
-
-        mock_client.return_value.get_zone.return_value = mock_zone
-
-        result = main.get_zone_cluster_intent_verified("mock_store_id")
-        self.assertFalse(result)
-
-    @mock.patch(
-        "google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient")
-    def test_get_zone_cluster_intent_verified_true(self, mock_client):
-        mock_zone = mock.MagicMock()
-        mock_zone.cluster_intent_verified = True
-
-        mock_client.return_value.get_zone.return_value = mock_zone
-
-        result = main.get_zone_cluster_intent_verified("mock_store_id")
-        self.assertTrue(result)
-
-    @mock.patch(
-        "google.cloud.gdchardwaremanagement_v1alpha.GDCHardwareManagementClient")
-    def test_set_zone_state_verify_cluster_intent(self, mock_client):
-        mock_operation = mock.MagicMock()
-        mock_client.return_value.signal_zone_state.return_value = mock_operation
-
-        result = main.set_zone_state_verify_cluster_intent("mock_store_id")
-        self.assertEqual(result, mock_operation)
-        mock_client.return_value.signal_zone_state.assert_called_once()

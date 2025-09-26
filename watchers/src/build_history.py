@@ -57,7 +57,7 @@ class BuildHistory:
         self.max_retries = max_retries
         self.trigger_name = trigger_name
         self.client = cloudbuild.CloudBuildClient()
-        self.builds: Dict[str, BuildSummary] = None
+        self.builds: Dict[str, BuildSummary] = self._get_build_history()
 
     def _get_build_history(self) ->Dict[str, BuildSummary]:
         """
@@ -141,9 +141,6 @@ class BuildHistory:
         if not zone_name:
             raise Exception('missing zone_name')
         
-        if self.builds is None:
-            self.builds = self._get_build_history()
-
         if zone_name not in self.builds:
             return False
         else:

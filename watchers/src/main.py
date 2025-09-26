@@ -13,10 +13,12 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from typing import Dict
 import functions_framework
 import os
 import io
 import flask
+from collections import defaultdict
 import csv
 import logging
 from google.api_core.operation import Operation
@@ -24,14 +26,11 @@ import requests
 import google_crc32c
 from requests.structures import CaseInsensitiveDict
 from urllib.parse import urlparse
-from google.api_core import client_options, exceptions
+from google.api_core import exceptions
 import google.auth
-import google.auth.transport.requests
 from google.cloud import edgecontainer
 from google.cloud import edgenetwork
-from google.cloud import secretmanager
 from google.cloud import gdchardwaremanagement_v1alpha
-from google.cloud import gkehub_v1
 from google.cloud.gdchardwaremanagement_v1alpha import Zone, SignalZoneStateRequest
 from google.cloud.devtools import cloudbuild
 from google.cloud import monitoring_v3
@@ -39,11 +38,19 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from dateutil.parser import parse
 from .maintenance_windows import MaintenanceExclusionWindow
 from .build_history import BuildHistory
+from .acp_zone import ACPZone, get_zones
+from .acp_membership import get_memberships
+from .clients import GoogleClients
+import concurrent.futures
+import threading
+import time
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 creds, auth_project = google.auth.default()
+
+clients = GoogleClients()
 
 @dataclass
 class WatcherParameters:
@@ -57,6 +64,7 @@ class WatcherParameters:
     cloud_build_trigger: str
     cloud_build_trigger_name: str
     max_retries: int
+    max_workers: int
 
 def get_parameters_from_environment():
     proj_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -67,6 +75,7 @@ def get_parameters_from_environment():
     source_of_truth_branch = os.environ.get("SOURCE_OF_TRUTH_BRANCH")
     source_of_truth_path = os.environ.get("SOURCE_OF_TRUTH_PATH")
     max_retries = int(os.environ.get("MAX_RETRIES", "0"))
+    max_workers = int(os.environ.get("MAX_WORKERS", "10"))
 
     cb_trigger = f'projects/{proj_id}/locations/{region}/triggers/{os.environ.get("CB_TRIGGER_NAME")}'
     cb_trigger_name = os.environ.get("CB_TRIGGER_NAME")
@@ -94,6 +103,8 @@ def get_parameters_from_environment():
         raise Exception('provide repo in the form of (github.com/org_name/repo_name) or (gitlab.com/org_name/repo_name)')
     if max_retries < 0 or max_retries > 5:
         raise Exception('max retries must be a value between 0 and 5')
+    if max_workers < 1 or max_workers > 100:
+        raise Exception('max workers must be a value between 1 and 100')
 
     return WatcherParameters(
         project_id=proj_id,
@@ -105,9 +116,111 @@ def get_parameters_from_environment():
         source_of_truth_repo=source_of_truth_repo,
         source_of_truth_branch=source_of_truth_branch,
         source_of_truth_path=source_of_truth_path,
-        max_retries=max_retries
+        max_retries=max_retries,
+        max_workers=max_workers
     )
 
+def _zone_watcher_worker(machine_project, location, stores, params, builds, machine_lists, unprocessed_zones, unprocessed_zones_lock):
+    thread_start_time = time.perf_counter()
+
+    cb_client = clients.get_cloudbuild_client()
+    count = 0
+
+    zones = get_zones(machine_project, location)
+
+    for store_id in stores:
+        store_info = stores[store_id]
+
+        zone_store_id = f'projects/{machine_project}/locations/{location}/zones/{store_id}'
+
+        try:
+            if store_info['zone_name']:
+                zone = store_info['zone_name']
+                zone_name_retrieved_from_api = False
+            else:
+                zone = zones[zone_store_id].globally_unique_id
+                zone_name_retrieved_from_api = True
+        except:
+            logger.error(f'Zone for store {store_id} cannot be found, skipping.')
+            continue
+
+        try:                                       
+            if not zone_name_retrieved_from_api:
+                logger.info(f'Zone name was provided directly in cluster intent for store: {store_id}. Skipping intent verification.')
+            elif zones[zone_store_id].cluster_intent_verified:
+                logger.info(f'Cluster intent is present and verification has already been set for Store: {store_id}. Skipping..')
+            else:
+                logger.info(f'Cluster intent is present but verification is not set on Store: {store_id}. Setting cluster intent verification.')
+                operation = set_zone_state_verify_cluster_intent(zone_store_id)
+                logger.info(f'HW API Operation: {operation.operation.name}')
+        except:
+            logger.error(
+                f'Cluster intent could not be checked for Store: {store_id}. Skipping',
+                exc_info=True,
+            )
+
+        
+        if zone not in machine_lists:
+            logger.warning(f'No machine found in zone {zone}')
+            continue
+
+        count_of_free_machines = 0
+        cluster_exists = False
+        with unprocessed_zones_lock:
+            if zone in unprocessed_zones:
+                unprocessed_zones.pop(zone)
+        for m in machine_lists[zone]:
+            if len(m.hosted_node.strip()) > 0:  # if there is any value, consider there is a cluster
+                # check if target cluster already exists
+                if (m.hosted_node.split('/')[5] == store_info['cluster_name']):
+                    cluster_exists = True
+                    break
+
+                logger.info(f'ZONE {zone}: {m.name} already used by {m.hosted_node}')
+            else:
+                logger.info(f'ZONE {zone}: {m.name} is a free node')
+                count_of_free_machines = count_of_free_machines+1
+
+        if cluster_exists and not builds.should_retry_zone_build(zone):
+            logger.info(f'Cluster already exists for {zone}. Skipping..')
+            continue
+
+        if count_of_free_machines >= int(store_info["node_count"]):
+            logger.info(f'ZONE {zone}: There are enough free  nodes to create cluster')
+        else:
+            logger.info(f'ZONE {zone}: Not enough free  nodes to create cluster. Need {str(store_info["node_count"])} but have {str(count_of_free_machines)} free nodes')
+            if not builds.should_retry_zone_build(zone):
+                continue
+
+        if zone_name_retrieved_from_api and not verify_zone_state(zones[zone_store_id].state ,zone_store_id, store_info['recreate_on_delete']):
+            logger.info(f'Zone: {zone}, Store: {store_id} is not in expected state! skipping..')
+            continue
+
+        # trigger cloudbuild to initiate the cluster building
+        repo_source = cloudbuild.RepoSource()
+        repo_source.branch_name = store_info['sync_branch']
+        repo_source.substitutions = {
+            "_STORE_ID": store_id,
+            "_ZONE": zone
+        }
+        req = cloudbuild.RunBuildTriggerRequest(
+            name=params.cloud_build_trigger,
+            source=repo_source
+        )
+        logger.debug(req)
+        try:
+            logger.info(f'triggering cloud build for {zone}')
+            logger.info(f'trigger: {params.cloud_build_trigger}')
+            cb_client.run_build_trigger(request=req)
+            count += 1
+            # response = opr.result()
+        except Exception as err:
+            logger.error(err)
+
+    thread_end_time = time.perf_counter()
+    logger.info(f"Thread zone_watcher({machine_project}, {location}) took {thread_end_time - thread_start_time:0.2f} seconds)")
+
+    return count
 
 @functions_framework.http
 def zone_watcher(req: flask.Request):
@@ -116,136 +229,47 @@ def zone_watcher(req: flask.Request):
     logger.info(f'Running zone watcher for: proj_id={params.project_id},sot={params.source_of_truth_repo}/{params.source_of_truth_branch}/{params.source_of_truth_path}, cb_trigger={params.cloud_build_trigger}')
     
     config_zone_info = read_intent_data(params, 'machine_project_id')
-    for proj_loc_key in config_zone_info:
-            (machine_project, location) = proj_loc_key
-
-            for store_id in config_zone_info[proj_loc_key]:
-                store_info = config_zone_info[proj_loc_key][store_id]
-
-                zone_store_id = (
-                    f'projects/{machine_project}/locations/{location}/zones/{store_id}'
-                )
-
-                try:                                       
-                    if get_zone_cluster_intent_verified(zone_store_id):
-                        logger.info(f'Cluster intent is present and verification has already been set for Store: {store_id}. Skipping..')
-                        continue
-                    logger.info(f'Cluster intent is present but verification is not set on Store: {store_id}. Setting cluster intent verification.')
-                    operation = set_zone_state_verify_cluster_intent(zone_store_id)
-                    logger.info(f'HW API Operation: {operation.operation.name}')
-                except:
-                    logger.error(
-                        f'Cluster intent could not be checked for Store: {store_id}. Skipping',
-                        exc_info=True,
-                    )
-                    continue
     
-    edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
-    if edgecontainer_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(edgecontainer_api_endpoint_override).netloc)
-        ec_client = edgecontainer.EdgeContainerClient(client_options=op)
-    else:  # use the default prod endpoint
-        ec_client = edgecontainer.EdgeContainerClient()
-    cb_client = cloudbuild.CloudBuildClient()
-
+    ec_client = clients.get_edgecontainer_client()
     builds = BuildHistory(params.project_id, params.region, params.max_retries, params.cloud_build_trigger_name)
 
-    # get machines list per machine_project per location, and group by GDCE zone
     machine_lists = {}
-    unprocessed_zones = {} # used to track zones outside of SoT.
-    for (machine_project, location) in config_zone_info:
-        req = edgecontainer.ListMachinesRequest(
-            parent=ec_client.common_location_path(machine_project, location)
-        )
-        
-        try:
-            res_pager = ec_client.list_machines(req)
-            for m in res_pager:
-                if m.zone not in machine_lists:
-                    machine_lists[m.zone] = [m]
-                    unprocessed_zones[m.zone] = (machine_project, location)
-                else:
-                    machine_lists[m.zone].append(m)
-        except Exception as err:
-            logger.error(f"Error listing machines for project: {machine_project}, location: {location}")
-            logger.error(err)
-
-    # if cluster already present in the zone, skip this zone unless the zone build should be retried
-    # method: check all the machines in the zone, and check if "hosted_node" has any value in it
-    count = 0
-    for proj_loc_key in config_zone_info:
-        (machine_project, location) = proj_loc_key
-
-        for store_id in config_zone_info[proj_loc_key]:
-            store_info = config_zone_info[proj_loc_key][store_id]
-
-            zone_store_id = f'projects/{machine_project}/locations/{location}/zones/{store_id}'
+    unprocessed_zones = {}
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=params.max_workers) as executor:
+        machine_futures = {
+            executor.submit(
+                ec_client.list_machines,
+                edgecontainer.ListMachinesRequest(
+                    parent=ec_client.common_location_path(machine_project, location)
+                ),
+            ): (machine_project, location)
+            for (machine_project, location) in config_zone_info
+        }
+        for future in concurrent.futures.as_completed(machine_futures):
+            machine_project, location = machine_futures[future]
             try:
-                if store_info['zone_name']:
-                    zone = store_info['zone_name']
-                    zone_name_retrieved_from_api = False
-                else:
-                    zone = get_zone_name(zone_store_id)
-                    zone_name_retrieved_from_api = True
-            except:
-                logger.error(f'Zone for store {store_id} cannot be found, skipping.', exc_info=True)
-                continue
-            
-            if zone not in machine_lists:
-                logger.warning(f'No machine found in zone {zone}')
-                continue
-
-            count_of_free_machines = 0
-            cluster_exists = False
-            unprocessed_zones.pop(zone)
-            for m in machine_lists[zone]:
-                if len(m.hosted_node.strip()) > 0:  # if there is any value, consider there is a cluster
-                    # check if target cluster already exists
-                    if (m.hosted_node.split('/')[5] == store_info['cluster_name']):
-                        cluster_exists = True
-                        break
-
-                    logger.info(f'ZONE {zone}: {m.name} already used by {m.hosted_node}')
-                else:
-                    logger.info(f'ZONE {zone}: {m.name} is a free node')
-                    count_of_free_machines = count_of_free_machines+1
-
-            if cluster_exists and not builds.should_retry_zone_build(zone):
-                logger.info(f'Cluster already exists for {zone}. Skipping..')
-                continue
-
-            if count_of_free_machines >= int(store_info["node_count"]):
-                logger.info(f'ZONE {zone}: There are enough free  nodes to create cluster')
-            else:
-                logger.info(f'ZONE {zone}: Not enough free  nodes to create cluster. Need {str(store_info["node_count"])} but have {str(count_of_free_machines)} free nodes')
-                if not builds.should_retry_zone_build(zone):
-                    continue
-
-            if zone_name_retrieved_from_api and not verify_zone_state(zone_store_id, store_info['recreate_on_delete']):
-                logger.info(f'Zone: {zone}, Store: {store_id} is not in expected state! skipping..')
-                continue
-
-            # trigger cloudbuild to initiate the cluster building
-            repo_source = cloudbuild.RepoSource()
-            repo_source.branch_name = store_info['sync_branch']
-            repo_source.substitutions = {
-                "_STORE_ID": store_id,
-                "_ZONE": zone
-            }
-            req = cloudbuild.RunBuildTriggerRequest(
-                name=params.cloud_build_trigger,
-                source=repo_source
-            )
-            logger.debug(req)
-            try:
-                logger.info(f'triggering cloud build for {zone}')
-                logger.info(f'trigger: {params.cloud_build_trigger}')
-                opr = cb_client.run_build_trigger(request=req)
-                # response = opr.result()
+                res_pager = future.result()
+                for m in res_pager:
+                    if m.zone not in machine_lists:
+                        machine_lists[m.zone] = [m]
+                        unprocessed_zones[m.zone] = (machine_project, location)
+                    else:
+                        machine_lists[m.zone].append(m)
             except Exception as err:
+                logger.error(f"Error listing machines for project: {machine_project}, location: {location}")
                 logger.error(err)
 
-            count += len(config_zone_info[proj_loc_key])
+    count = 0
+    unprocessed_zones_lock = threading.Lock()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=params.max_workers) as executor:
+        watcher_futures = []
+        for (machine_project, location), stores in config_zone_info.items():
+            future = executor.submit(_zone_watcher_worker, machine_project, location, stores, params, builds, machine_lists, unprocessed_zones, unprocessed_zones_lock)
+            watcher_futures.append(future)
+        
+        for future in concurrent.futures.as_completed(watcher_futures):
+            count += future.result()
 
     logger.info(f'total zones triggered = {count}')
 
@@ -254,6 +278,148 @@ def zone_watcher(req: flask.Request):
 
     return f'total zones triggered = {count}'
 
+def _cluster_watcher_worker(project_id, location, stores, params):
+    ec_client = clients.get_edgecontainer_client()
+    en_client = clients.get_edgenetwork_client()
+    gkehub_client = clients.get_gkehub_client()
+    cb_client = clients.get_cloudbuild_client()
+    count = 0
+
+    zones = get_zones(project_id, location)
+    memberships = get_memberships(project_id, location)
+
+
+    req_c = edgecontainer.ListClustersRequest(
+        parent=ec_client.common_location_path(project_id, location)
+    )
+    
+    try:
+        res_pager_c = ec_client.list_clusters(req_c)
+        clusters_by_zone: Dict[str, list[edgecontainer.Cluster]] = defaultdict(list)
+        for c in res_pager_c:
+            clusters_by_zone[c.control_plane.local.node_location].append(c)
+    except Exception as err:
+        logger.error(f"Error listing clusters for project: {project_id}, location: {location}")
+        logger.error(err)
+        return 0
+
+    for store_id in stores:
+        store_info = stores[store_id]
+
+        machine_project_id = store_info['machine_project_id']
+        zone_store_id = f'projects/{machine_project_id}/locations/{location}/zones/{store_id}'
+        try:
+            if store_info['zone_name']:
+                zone = store_info['zone_name']
+            else:
+                zone = zones[zone_store_id].globally_unique_id
+        except:
+            logger.error(f'Zone for store {store_id} cannot be found, skipping.', exc_info=True)
+            continue
+
+        zone_cluster_list = clusters_by_zone[zone]
+        if len(zone_cluster_list) == 0:
+            logger.warning(f'No lcp cluster found in {zone}')
+            continue
+        elif len(zone_cluster_list) > 1:
+            logger.warning(f'More than 1 lcp clusters found in {zone}')
+        logger.debug(zone_cluster_list)
+
+        cluster = zone_cluster_list[0]
+        rw = cluster.maintenance_policy.window.recurring_window
+        has_update = False
+
+        if (not store_info['maintenance_window_recurrence'] or
+            not store_info['maintenance_window_start'] or
+            not store_info['maintenance_window_end']
+            ):
+            has_update = False
+        elif (rw.recurrence != store_info['maintenance_window_recurrence'] or
+                rw.window.start_time != parse(store_info['maintenance_window_start']) or
+                rw.window.end_time != parse(store_info['maintenance_window_end'])):
+            logger.info("Maintenance window requires update")
+            logger.info(f"Actual values (recurrence={rw.recurrence}, start_time={rw.window.start_time}, end_time={rw.window.end_time})")
+            logger.info(f"Desired values (recurrence={store_info['maintenance_window_recurrence']}, start_time={store_info['maintenance_window_start']}, end_time={store_info['maintenance_window_end']})")
+            has_update = True
+        else:
+            defined_exclusion_windows = MaintenanceExclusionWindow.get_exclusion_windows_from_sot(store_info)
+            actual_exclusion_windows = MaintenanceExclusionWindow.get_exclusion_windows_from_cluster_response(cluster)
+            if defined_exclusion_windows != actual_exclusion_windows:
+                has_update = True
+
+        req_n = edgenetwork.ListSubnetsRequest(
+            parent=f'{en_client.common_location_path(store_info["machine_project_id"], location)}/zones/{zone}'
+        )
+
+        try:
+            res_pager_n = en_client.list_subnets(req_n)
+            subnet_list = [{'vlan_id': net.vlan_id, 'ipv4_cidr': sorted(net.ipv4_cidr)} for net in res_pager_n]
+        except Exception as err:
+            logger.error(f"Error listing subnets for project: {project_id}, location: {location}, zone: {zone}")
+            logger.error(err)
+            continue
+            
+        subnet_list.sort(key=lambda x: x['vlan_id'])
+        logger.debug(subnet_list)
+        try:
+            for desired_subnet in store_info['subnet_vlans'].split(','):
+                try:
+                    vlan_id = int(desired_subnet)
+                except Exception as err:
+                    logger.error("unable to convert vlan to an int", err)
+
+                if vlan_id not in [n['vlan_id'] for n in subnet_list]:
+                    logger.info(f"No vlan created for vlan: {vlan_id}")
+                    has_update = True
+
+            for actual_vlan_id in [n['vlan_id'] for n in subnet_list]:
+                if actual_vlan_id not in [int(v) for v in store_info['subnet_vlans'].split(',')]:
+                    logger.error(f"VLAN {actual_vlan_id} is defined in the environment, but not in the source of truth. The subnet will need to be manually deleted from the environment.")
+        except Exception as err:
+            logger.error(err)
+
+        cluster_name = store_info['cluster_name']
+        if "labels" in store_info:
+            labels = store_info['labels'].strip()
+        else:
+            labels = ""
+
+        if labels:
+            desired_labels = {}
+            for label in labels.split(","):
+                kv_pair = label.split("=")
+                desired_labels[kv_pair[0]] = kv_pair[1]
+
+            membership = memberships[f"projects/{project_id}/locations/global/memberships/{cluster_name}"]
+
+            membership_labels = membership.labels
+            if (desired_labels != membership_labels):
+                has_update = True
+
+        if not has_update:
+            continue
+
+        repo_source = cloudbuild.RepoSource()
+        repo_source.branch_name = store_info['sync_branch']
+        repo_source.substitutions = {
+            "_STORE_ID": store_id,
+            "_ZONE": zone
+        }
+        req = cloudbuild.RunBuildTriggerRequest(
+            name=params.cloud_build_trigger,
+            source=repo_source
+        )
+        logger.debug(req)
+        try:
+            logger.info(f'triggering cloud build for {zone}')
+            logger.info(f'trigger: {params.cloud_build_trigger}')
+            cb_client.run_build_trigger(request=req)
+            count += 1
+        except Exception as err:
+            logger.error(f'failed to trigger cloud build for {zone}')
+            logger.error(err)
+            continue
+    return count
 
 @functions_framework.http
 def cluster_watcher(req: flask.Request):
@@ -263,183 +429,16 @@ def cluster_watcher(req: flask.Request):
     logger.info(f'cb_trigger = {params.cloud_build_trigger}')
 
     config_zone_info = read_intent_data(params, 'fleet_project_id')
-
-    edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
-    edgenetwork_api_endpoint_override = os.environ.get("EDGE_NETWORK_API_ENDPOINT_OVERRIDE")
-    gkehub_api_endpoint_override = os.environ.get("GKEHUB_API_ENDPOINT_OVERRIDE")
-
-    if edgecontainer_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(edgecontainer_api_endpoint_override).netloc)
-        ec_client = edgecontainer.EdgeContainerClient(client_options=op)
-    else:  # use the default prod endpoint
-        ec_client = edgecontainer.EdgeContainerClient()
-
-    if edgenetwork_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(edgenetwork_api_endpoint_override).netloc)
-        en_client = edgenetwork.EdgeNetworkClient(client_options=op)
-    else:  # use the default prod endpoint
-        en_client = edgenetwork.EdgeNetworkClient()
-
-    if gkehub_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(gkehub_api_endpoint_override).netloc)
-        gkehub_client = gkehub_v1.GkeHubClient(client_options=op)
-    else:  # use the default prod endpoint
-        gkehub_client = gkehub_v1.GkeHubClient()
-
-    cb_client = cloudbuild.CloudBuildClient()
-
     count = 0
-    for proj_loc_key in config_zone_info:
-        (project_id, location) = proj_loc_key
 
-        # Get all the clusters in the location,
-        # the GDCE Zone info is in "control_plane"
-        # maintain window info is in "maintenance_policy.window"
-        req_c = edgecontainer.ListClustersRequest(
-            parent=ec_client.common_location_path(project_id, location)
-        )
+    with concurrent.futures.ThreadPoolExecutor(max_workers=params.max_workers) as executor:
+        futures = []
+        for (project_id, location), stores in config_zone_info.items():
+            future = executor.submit(_cluster_watcher_worker, project_id, location, stores, params)
+            futures.append(future)
         
-        try:
-            res_pager_c = ec_client.list_clusters(req_c)
-            clusters = [c for c in res_pager_c]  # all the clusters in the location
-        except Exception as err:
-            logger.error(f"Error listing clusters for project: {project_id}, location: {location}")
-            logger.error(err)
-            continue
-
-        for store_id in config_zone_info[proj_loc_key]:
-            store_info = config_zone_info[proj_loc_key][store_id]
-
-            machine_project_id = store_info['machine_project_id']
-            zone_store_id = f'projects/{machine_project_id}/locations/{location}/zones/{store_id}'
-            try:
-                if store_info['zone_name']:
-                    zone = store_info['zone_name']
-                else:
-                    zone = get_zone_name(zone_store_id)
-            except:
-                logger.error(f'Zone for store {store_id} cannot be found, skipping.', exc_info=True)
-                continue
-
-            # filter the cluster in the GDCE zone, should be at most 1
-            zone_cluster_list = [c for c in clusters if c.control_plane.local.node_location
-                                 == zone]
-            if len(zone_cluster_list) == 0:
-                logger.warning(f'No lcp cluster found in {zone}')
-                continue
-            elif len(zone_cluster_list) > 1:
-                logger.warning(f'More than 1 lcp clusters found in {zone}')
-            logger.debug(zone_cluster_list)
-            rw = zone_cluster_list[0].maintenance_policy.window.recurring_window  # cluster in this GDCE zone
-            # Validate the start_time, end_time and rrule string of the maintenance window
-            has_update = False
-
-            if (not store_info['maintenance_window_recurrence'] or
-                not store_info['maintenance_window_start'] or
-                not store_info['maintenance_window_end']
-                ):
-                # One of the MW properties is not set, so assume no update needs to be made
-                has_update = False
-            elif (rw.recurrence != store_info['maintenance_window_recurrence'] or
-                    rw.window.start_time != parse(store_info['maintenance_window_start']) or
-                    rw.window.end_time != parse(store_info['maintenance_window_end'])):
-                logger.info("Maintenance window requires update")
-                logger.info(f"Actual values (recurrence={rw.recurrence}, start_time={rw.window.start_time}, end_time={rw.window.end_time})")
-                logger.info(f"Desired values (recurrence={store_info['maintenance_window_recurrence']}, start_time={store_info['maintenance_window_start']}, end_time={store_info['maintenance_window_end']})")
-                has_update = True
-            else:
-                # MW properties haven't changed, check exclusion windows
-                defined_exclusion_windows = MaintenanceExclusionWindow.get_exclusion_windows_from_sot(store_info)
-
-                # Retrieving maintenance window from API until property exists in client library response
-                mw = get_maintenance_window_property(zone_cluster_list[0].name)
-                actual_exclusion_windows = MaintenanceExclusionWindow.get_exclusion_windows_from_api_response(mw)
-
-                if defined_exclusion_windows != actual_exclusion_windows:
-                    has_update = True
-
-            # get subnet vlan ids and ip addresses of this GDCE Zone
-            req_n = edgenetwork.ListSubnetsRequest(
-                parent=f'{en_client.common_location_path(store_info["machine_project_id"], location)}/zones/{zone}'
-            )
-
-            try:
-                res_pager_n = en_client.list_subnets(req_n)
-                subnet_list = [{'vlan_id': net.vlan_id, 'ipv4_cidr': sorted(net.ipv4_cidr)} for net in res_pager_n]
-            except Exception as err:
-                logger.error(f"Error listing subnets for project: {project_id}, location: {location}, zone: {zone}")
-                logger.error(err)
-                continue
-                
-            subnet_list.sort(key=lambda x: x['vlan_id'])
-            logger.debug(subnet_list)
-            try:
-                # Only consider vlan ids for updates (L2), L3 not handled
-                for desired_subnet in store_info['subnet_vlans'].split(','):
-                    try:
-                        vlan_id = int(desired_subnet)
-                    except Exception as err:
-                        logger.error("unable to convert vlan to an int", err)
-
-                    if vlan_id not in [n['vlan_id'] for n in subnet_list]:
-                        logger.info(f"No vlan created for vlan: {vlan_id}")
-                        has_update = True
-
-                for actual_vlan_id in [n['vlan_id'] for n in subnet_list]:
-                    if actual_vlan_id not in [int(v) for v in store_info['subnet_vlans'].split(',')]:
-                        logger.error(f"VLAN {actual_vlan_id} is defined in the environment, but not in the source of truth. The subnet will need to be manually deleted from the environment.")
-            except Exception as err:
-                logger.error(err)
-
-            # Check for fleet labels
-            cluster_name = store_info['cluster_name']
-
-            ## labels are specified in SoT in the following way: "key1=value1,key2=value2,key3=value3"
-            if "labels" in store_info:
-                labels = store_info['labels'].strip()
-            else:
-                labels = ""
-
-            # if labels is not defined in SoT, then don't trigger an update
-            if labels:
-                desired_labels = {}
-
-                for label in labels.split(","):
-                    kv_pair = label.split("=")
-                    desired_labels[kv_pair[0]] = kv_pair[1]
-
-                req = gkehub_v1.GetMembershipRequest(name=f"projects/{project_id}/locations/global/memberships/{cluster_name}")
-                res = gkehub_client.get_membership(request=req)
-
-                membership_labels = res.labels
-
-                if (desired_labels != membership_labels):
-                    has_update = True
-
-            if not has_update:
-                continue
-            # trigger cloudbuild to initiate the cluster updating
-            repo_source = cloudbuild.RepoSource()
-            repo_source.branch_name = store_info['sync_branch']
-            repo_source.substitutions = {
-                "_STORE_ID": store_id,
-                "_ZONE": zone
-            }
-            req = cloudbuild.RunBuildTriggerRequest(
-                name=params.cloud_build_trigger,
-                source=repo_source
-            )
-            logger.debug(req)
-            try:
-                logger.info(f'triggering cloud build for {zone}')
-                logger.info(f'trigger: {params.cloud_build_trigger}')
-                opr = cb_client.run_build_trigger(request=req)
-            except Exception as err:
-                logger.error(f'failed to trigger cloud build for {zone}')
-                logger.error(err)
-                continue
-
-            count += len(config_zone_info[proj_loc_key])
+        for future in concurrent.futures.as_completed(futures):
+            count += future.result()
 
     return f'total zones triggered = {count}'
 
@@ -459,18 +458,24 @@ def zone_active_metric(req: flask.Request):
     rdr = csv.DictReader(io.StringIO(zone_config_fio))  # will raise exception if csv parsing fails
 
     time_series_data = []
+    zones: Dict[str, ACPZone] = {}
+    zones_project_locations_checked = set()
+
     for row in rdr:
         f_proj_id = row['fleet_project_id']
         m_proj_id = f_proj_id if row['machine_project_id'] is None or len(row['machine_project_id']) == 0 else row['machine_project_id']
         loc = params.region if row['location'] is None or len(row['location']) == 0 else row['location']
         store_id = row['store_id']
         cl_name = row['cluster_name']
-        full_zone_name = f'projects/{m_proj_id}/locations/{loc}/zones/{store_id}'
         b_generate_metric = False
         b_zone_found = False
         active_metric = 0  # 0 - inactive, 1 - active
+        if (m_proj_id, loc) not in zones_project_locations_checked:
+            zones.update(get_zones(m_proj_id, loc))
+            zones_project_locations_checked.add((m_proj_id, loc))   
+
         try:
-            zone = get_zone(full_zone_name)
+            zone = zones[store_id]
             logger.debug(f'{store_id} state = {Zone.State(zone.state).name}')
             b_zone_found = True
         except Exception as e:
@@ -523,7 +528,7 @@ def zone_active_metric(req: flask.Request):
         time_series_data.append(time_series_point)
 
     # send batch requests to metric
-    m_client = monitoring_v3.MetricServiceClient()
+    m_client = clients.get_monitoring_client()
     batch_size = 200
     for i in range(0, len(time_series_data), batch_size):
         request = monitoring_v3.CreateTimeSeriesRequest({
@@ -574,70 +579,12 @@ def read_intent_data(params, named_key):
     
     return config_zone_info
 
-def get_zone(store_id: str) -> Zone:
-    """Return Zone info.
-    Args:
-      store_id: name of zone which is store id usually
-    Returns:
-      Zone object
-    """
-    hardware_management_api_endpoint_override = os.environ.get('HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE')
-    if hardware_management_api_endpoint_override:
-        op = client_options.ClientOptions(api_endpoint=urlparse(hardware_management_api_endpoint_override).netloc)
-        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient(client_options=op)
-    else:
-        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient()
-
-    return client.get_zone(name=store_id)
-
-
-def get_zone_name(store_id: str) -> str:
-    """Return Zone info.
-    Args:
-      store_id: name of zone which is store id usually
-    Returns:
-      rack zone name
-    """
-    return get_zone(store_id).globally_unique_id
-
-
-def get_zone_state(store_id: str) -> Zone.State:
-    """Return Zone info.
-    Args:
-      store_id: name of zone which is store id usually
-    Returns:
-      zone state
-    """
-    return get_zone(store_id).state
-
-def get_zone_cluster_intent_verified(store_id: str) -> bool:
-    '''Return Zone info.
-    Args:
-      store_id: name of zone which is store id usually
-    Returns:
-      bool
-    '''
-    
-    return get_zone(store_id).cluster_intent_verified
-
 def set_zone_state_verify_cluster_intent(store_id: str) -> Operation:
     '''Return Zone info.
     Args:
       store_id: name of zone which is store id usually
     '''
-
-    hardware_management_api_endpoint_override = os.environ.get(
-        'HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE'
-    )
-    if hardware_management_api_endpoint_override:
-        op = client_options.ClientOptions(
-            api_endpoint=urlparse(hardware_management_api_endpoint_override).netloc
-        )
-        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient(
-            client_options=op
-        )
-    else:
-        client = gdchardwaremanagement_v1alpha.GDCHardwareManagementClient()
+    client = clients.get_hardware_management_client()
 
     request = gdchardwaremanagement_v1alpha.SignalZoneStateRequest(
         name=store_id,
@@ -646,7 +593,7 @@ def set_zone_state_verify_cluster_intent(store_id: str) -> Operation:
     return client.signal_zone_state(request=request)
 
 
-def verify_zone_state(store_id: str, recreate_on_delete: bool) -> bool:
+def verify_zone_state(state: Zone.State,store_id: str, recreate_on_delete: bool) -> bool:
     """Checks if zone is in right state to create.
     Args:
         store_id: name of zone which is store id usually
@@ -654,8 +601,6 @@ def verify_zone_state(store_id: str, recreate_on_delete: bool) -> bool:
     Returns:
         if cluster can be created or not
     """
-    state = get_zone_state(store_id)
-
     # READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS, provisioning has not yet been attempted
     # CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED, provisioning has been attempted and is either in progress or failed
     if state == Zone.State.READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS or state == Zone.State.CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED :
@@ -667,37 +612,6 @@ def verify_zone_state(store_id: str, recreate_on_delete: bool) -> bool:
         return True
     
     return False
-
-def get_maintenance_window_property(cluster_name):
-    """Return maintenance window info directly from API. This method will be replaced once client libraries support
-          maintenance exclusion properties in their responses.
-    Args:
-      cluster_name: full cluster name in the form of projects/<project-id>/locations/<location>/clusters/<cluster-name>
-    Returns:
-      maintenance window property from API, which includes maintenance exclusions.
-    """
-    if not creds.valid:
-        authRequest = google.auth.transport.requests.Request()
-        creds.refresh(authRequest)
-
-    base_url = "https://edgecontainer.googleapis.com/"
-
-    edgecontainer_api_endpoint_override = os.environ.get("EDGE_CONTAINER_API_ENDPOINT_OVERRIDE")
-    if edgecontainer_api_endpoint_override:
-        base_url = edgecontainer_api_endpoint_override
-
-    headers = {
-        "Authorization": f"Bearer {creds.token}"
-    }
-
-    url = f"{base_url}/v1/{cluster_name}"
-
-    cluster_response = requests.get(url, headers=headers)
-
-    if cluster_response.status_code == 200:
-        return cluster_response.json()["maintenancePolicy"]
-    else:
-        raise Exception(f"Unable to query for cluster with status code ({cluster_response.status_code})")
 
 class ClusterIntentReader:
     def __init__(self, repo, branch, sourceOfTruth, token):
@@ -749,7 +663,7 @@ class ClusterIntentReader:
 
 
 def get_git_token_from_secrets_manager(secrets_project_id, secret_id, version_id="latest"):
-    client = secretmanager.SecretManagerServiceClient()
+    client = clients.get_secret_manager_client()
 
     name = f"projects/{secrets_project_id}/secrets/{secret_id}/versions/{version_id}"
 

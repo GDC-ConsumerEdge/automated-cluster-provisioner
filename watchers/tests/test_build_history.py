@@ -173,21 +173,27 @@ class TestBuildHistory(unittest.TestCase):
 
     def test_init(self, MockCloudBuildClient):
         instance = MockCloudBuildClient.return_value
+        mock_trigger = MagicMock()
+        mock_trigger.name = self.trigger_name
+        mock_trigger.id = self.trigger_id
+        instance.list_build_triggers.return_value = [mock_trigger]
+        instance.list_builds.return_value = []
+
         history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
         self.assertEqual(history.project_id, self.project_id)
         self.assertEqual(history.region, self.region)
         self.assertEqual(history.max_retries, self.max_retries)
         self.assertEqual(history.trigger_name, self.trigger_name)
         self.assertIs(history.client, instance)
-        self.assertIsNone(history.builds)
+        self.assertIsNotNone(history.builds)
         MockCloudBuildClient.assert_called_once()
 
     def test_get_build_history_no_triggers(self, MockCloudBuildClient):
         mock_client = MockCloudBuildClient.return_value
         mock_client.list_build_triggers.return_value = [] # No triggers found
 
-        history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
-        self.assertRaises(Exception, history._get_build_history)
+        with self.assertRaises(Exception):
+            BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
 
     def test_get_build_history_no_matching_triggers(self, MockCloudBuildClient):
         mock_client = MockCloudBuildClient.return_value
@@ -196,9 +202,8 @@ class TestBuildHistory(unittest.TestCase):
         mock_trigger.id = "other-id"
         mock_client.list_build_triggers.return_value = [mock_trigger]
 
-        history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
-
-        self.assertRaises(Exception, history._get_build_history)
+        with self.assertRaises(Exception):
+            BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
 
     def test_get_build_history_matching_trigger_no_builds(self, MockCloudBuildClient):
         mock_client = MockCloudBuildClient.return_value
@@ -209,9 +214,8 @@ class TestBuildHistory(unittest.TestCase):
         mock_client.list_builds.return_value = [] # No builds found
 
         history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
-        build_dict = history._get_build_history()
-
-        self.assertEqual(build_dict, {})
+        
+        self.assertEqual(history.builds, {})
         mock_client.list_build_triggers.assert_called_once()
         mock_client.list_builds.assert_called_once_with(request=cloudbuild.ListBuildsRequest(
             project_id=self.project_id,
@@ -237,7 +241,7 @@ class TestBuildHistory(unittest.TestCase):
         ] # Order shouldn't matter for grouping, but does for status updates
 
         history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
-        build_dict = history._get_build_history()
+        build_dict = history.builds
 
         self.assertIn("zone-a", build_dict)
         self.assertIn("zone-b", build_dict)
@@ -268,8 +272,7 @@ class TestBuildHistory(unittest.TestCase):
 
         mock_client.list_builds.return_value = []
 
-        history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
-        history._get_build_history()
+        BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
 
         expected_filter = "trigger_id=id1 OR trigger_id=id3"
         mock_client.list_builds.assert_called_once_with(request=cloudbuild.ListBuildsRequest(
@@ -334,7 +337,7 @@ class TestBuildHistory(unittest.TestCase):
         history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
         self.assertFalse(history.should_retry_zone_build("zone-a"))
 
-    def test_should_retry_zone_build_lazy_load(self, MockCloudBuildClient):
+    def test_should_retry_zone_build_eager_load(self, MockCloudBuildClient):
         mock_client = MockCloudBuildClient.return_value
         mock_trigger = MagicMock(); mock_trigger.name = self.trigger_name; mock_trigger.id = self.trigger_id
         mock_client.list_build_triggers.return_value = [mock_trigger]
@@ -342,11 +345,10 @@ class TestBuildHistory(unittest.TestCase):
         mock_client.list_builds.return_value = [build1]
 
         history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
-        self.assertIsNone(history.builds) # Initially None
+        self.assertIsNotNone(history.builds) # Should be loaded at init
 
-        # First call - fetches history
+        # First call
         self.assertTrue(history.should_retry_zone_build("zone-a"))
-        self.assertIsNotNone(history.builds)
         mock_client.list_builds.assert_called_once()
 
         # Second call - uses cached history
@@ -355,6 +357,13 @@ class TestBuildHistory(unittest.TestCase):
         mock_client.list_builds.assert_not_called() # Should not call again
 
     def test_should_retry_zone_build_missing_zone_name(self, MockCloudBuildClient):
+        mock_client = MockCloudBuildClient.return_value
+        mock_trigger = MagicMock()
+        mock_trigger.name = self.trigger_name
+        mock_trigger.id = self.trigger_id
+        mock_client.list_build_triggers.return_value = [mock_trigger]
+        mock_client.list_builds.return_value = []
+
         history = BuildHistory(self.project_id, self.region, self.max_retries, self.trigger_name)
         with self.assertRaisesRegex(Exception, 'missing zone_name'):
             history.should_retry_zone_build(None)
