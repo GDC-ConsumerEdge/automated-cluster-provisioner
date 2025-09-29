@@ -18,16 +18,19 @@ from google.auth import credentials as google_credentials
 from google.cloud.gdchardwaremanagement_v1alpha import Zone
 from src.acp_zone import ACPZone
 
-import google.auth
-auth_patch = mock.patch('google.auth.default', autospec=True)
+auth_patch = mock.patch('google.auth.default')
 mock_auth = auth_patch.start()
 mock_credentials = mock.MagicMock(spec=google_credentials.Credentials)
 mock_project_id = "mock-project"
 mock_auth.return_value = (mock_credentials, mock_project_id)
 
+clients_patch = mock.patch('src.clients.GoogleClients')
+clients_patch.start()
+
 from src import main
 
 auth_patch.stop()
+clients_patch.stop()
 
 class TestMain(unittest.TestCase):
 
