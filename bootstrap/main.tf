@@ -303,20 +303,22 @@ resource "google_cloudfunctions2_function" "zone-watcher" {
 
   service_config {
     max_instance_count = 1
-    available_memory   = "512M"
+    available_cpu = "1"
+    available_memory   = "2G"
     timeout_seconds    = 60
     environment_variables = {
-      GOOGLE_CLOUD_PROJECT                     = var.project_id,
-      CB_TRIGGER_NAME                          = "gdce-cluster-provisioner-trigger-${var.environment}"
-      REGION                                   = var.region
-      EDGE_CONTAINER_API_ENDPOINT_OVERRIDE     = var.edge_container_api_endpoint_override
-      HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override
-      SOURCE_OF_TRUTH_REPO                     = var.source_of_truth_repo
-      SOURCE_OF_TRUTH_BRANCH                   = var.source_of_truth_branch
-      SOURCE_OF_TRUTH_PATH                     = var.source_of_truth_path
-      PROJECT_ID_SECRETS                       = var.project_id_secrets
-      GIT_SECRET_ID                            = var.git_secret_id
-      MAX_RETRIES                              = var.cluster_creation_max_retries
+      GOOGLE_CLOUD_PROJECT                      = var.project_id,
+      CB_TRIGGER_NAME                           = "gdce-cluster-provisioner-trigger-${var.environment}"
+      REGION                                    = var.region
+      EDGE_CONTAINER_API_ENDPOINT_OVERRIDE      = var.edge_container_api_endpoint_override
+      HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override
+      SOURCE_OF_TRUTH_REPO                      = var.source_of_truth_repo
+      SOURCE_OF_TRUTH_BRANCH                    = var.source_of_truth_branch
+      SOURCE_OF_TRUTH_PATH                      = var.source_of_truth_path
+      PROJECT_ID_SECRETS                        = var.project_id_secrets
+      GIT_SECRET_ID                             = var.git_secret_id
+      MAX_RETRIES                               = var.cluster_creation_max_retries
+      MAX_WORKERS                               = "20"
     }
     service_account_email = google_service_account.zone-watcher-agent.email
   }
@@ -370,21 +372,23 @@ resource "google_cloudfunctions2_function" "cluster-watcher" {
 
   service_config {
     max_instance_count = 1
-    available_memory   = "256M"
+    available_cpu = "1"
+    available_memory   = "2G"
     timeout_seconds    = 60
     environment_variables = {
-      GOOGLE_CLOUD_PROJECT                     = var.project_id,
-      CB_TRIGGER_NAME                          = "gdce-cluster-reconciler-trigger-${var.environment}"
-      REGION                                   = var.region
-      EDGE_CONTAINER_API_ENDPOINT_OVERRIDE     = var.edge_container_api_endpoint_override
-      EDGE_NETWORK_API_ENDPOINT_OVERRIDE       = var.edge_network_api_endpoint_override
-      HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override
-      GKEHUB_API_ENDPOINT_OVERRIDE             = var.gke_hub_api_endpoint_override
-      SOURCE_OF_TRUTH_REPO                     = var.source_of_truth_repo
-      SOURCE_OF_TRUTH_BRANCH                   = var.source_of_truth_branch
-      SOURCE_OF_TRUTH_PATH                     = var.source_of_truth_path
-      PROJECT_ID_SECRETS                       = var.project_id_secrets
-      GIT_SECRET_ID                            = var.git_secret_id
+      GOOGLE_CLOUD_PROJECT                      = var.project_id,
+      CB_TRIGGER_NAME                           = "gdce-cluster-reconciler-trigger-${var.environment}"
+      REGION                                    = var.region
+      EDGE_CONTAINER_API_ENDPOINT_OVERRIDE      = var.edge_container_api_endpoint_override
+      EDGE_NETWORK_API_ENDPOINT_OVERRIDE        = var.edge_network_api_endpoint_override
+      HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override
+      GKEHUB_API_ENDPOINT_OVERRIDE              = var.gke_hub_api_endpoint_override
+      SOURCE_OF_TRUTH_REPO                      = var.source_of_truth_repo
+      SOURCE_OF_TRUTH_BRANCH                    = var.source_of_truth_branch
+      SOURCE_OF_TRUTH_PATH                      = var.source_of_truth_path
+      PROJECT_ID_SECRETS                        = var.project_id_secrets
+      GIT_SECRET_ID                             = var.git_secret_id
+      MAX_WORKERS                               = "20"
     }
     service_account_email = google_service_account.zone-watcher-agent.email
   }
@@ -442,17 +446,17 @@ resource "google_cloudfunctions2_function" "zone-active-metric" {
     available_memory   = "256M"
     timeout_seconds    = 60
     environment_variables = {
-      GOOGLE_CLOUD_PROJECT                     = var.project_id,
-      CB_TRIGGER_NAME                          = "gdce-cluster-reconciler-trigger-${var.environment}"
-      REGION                                   = var.region
-      EDGE_CONTAINER_API_ENDPOINT_OVERRIDE     = var.edge_container_api_endpoint_override
-      EDGE_NETWORK_API_ENDPOINT_OVERRIDE       = var.edge_network_api_endpoint_override
-      HARDWARE_MANAGMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override
-      SOURCE_OF_TRUTH_REPO                     = var.source_of_truth_repo
-      SOURCE_OF_TRUTH_BRANCH                   = var.source_of_truth_branch
-      SOURCE_OF_TRUTH_PATH                     = var.source_of_truth_path
-      PROJECT_ID_SECRETS                       = var.project_id_secrets
-      GIT_SECRET_ID                            = var.git_secret_id
+      GOOGLE_CLOUD_PROJECT                      = var.project_id,
+      CB_TRIGGER_NAME                           = "gdce-cluster-reconciler-trigger-${var.environment}"
+      REGION                                    = var.region
+      EDGE_CONTAINER_API_ENDPOINT_OVERRIDE      = var.edge_container_api_endpoint_override
+      EDGE_NETWORK_API_ENDPOINT_OVERRIDE        = var.edge_network_api_endpoint_override
+      HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override
+      SOURCE_OF_TRUTH_REPO                      = var.source_of_truth_repo
+      SOURCE_OF_TRUTH_BRANCH                    = var.source_of_truth_branch
+      SOURCE_OF_TRUTH_PATH                      = var.source_of_truth_path
+      PROJECT_ID_SECRETS                        = var.project_id_secrets
+      GIT_SECRET_ID                             = var.git_secret_id
     }
     service_account_email = google_service_account.zone-watcher-agent.email
   }

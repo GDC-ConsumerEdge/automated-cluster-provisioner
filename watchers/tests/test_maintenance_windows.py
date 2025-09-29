@@ -61,31 +61,31 @@ class TestMaintenanceWindows(unittest.TestCase):
         self.assertEqual(actual_exclusions, expected_exclusions)
 
     def test_get_exclusion_windows_from_api_response_defined(self):
-        maintenance_policy = {
-            "maintenanceExclusions": [
-                {
-                    "id": "test1",
-                    "window": {
-                        "startTime": "2024-07-20T12:00:00Z",
-                        "endTime": "2024-07-20T13:00:00Z"
-                    }
-                }
-            ]
-        }
+        mock_cluster = mock.MagicMock()
+        mock_cluster.maintenance_policy.maintenance_exclusions = [
+            mock.MagicMock(
+                id="test1",
+                window=mock.MagicMock(
+                    start_time=parse("2024-07-20T12:00:00Z"),
+                    end_time=parse("2024-07-20T13:00:00Z")
+                )
+            )
+        ]
 
         expected_exclusions = {
             maintenance_windows.MaintenanceExclusionWindow("test1", parse("2024-07-20T12:00:00Z"), parse("2024-07-20T13:00:00Z"))
         }
 
-        actual_exclusions = maintenance_windows.MaintenanceExclusionWindow.get_exclusion_windows_from_api_response(maintenance_policy)
+        actual_exclusions = maintenance_windows.MaintenanceExclusionWindow.get_exclusion_windows_from_cluster_response(mock_cluster)
 
         self.assertEqual(actual_exclusions, expected_exclusions)
 
-    def test_get_exclusion_windows_from_api_response_not_defined(self):
-        maintenance_policy = {}
+    def test_get_exclusion_windows_from_cluster_response_not_defined(self):
+        mock_cluster = mock.MagicMock()
+        mock_cluster.maintenance_policy = None
 
         expected_exclusions = set()
 
-        actual_exclusions = maintenance_windows.MaintenanceExclusionWindow.get_exclusion_windows_from_api_response(maintenance_policy)
+        actual_exclusions = maintenance_windows.MaintenanceExclusionWindow.get_exclusion_windows_from_cluster_response(mock_cluster)
 
         self.assertEqual(actual_exclusions, expected_exclusions)
