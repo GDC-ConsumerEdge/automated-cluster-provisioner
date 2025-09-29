@@ -22,17 +22,21 @@ import flask
 from google.auth import credentials as google_credentials
 from google.cloud import edgecontainer
 
-auth_patch = mock.patch('google.auth.default', autospec=True)
+auth_patch = mock.patch('google.auth.default')
 mock_auth = auth_patch.start()
 mock_credentials = mock.MagicMock(spec=google_credentials.Credentials)
 mock_project_id = "mock-project"
 mock_auth.return_value = (mock_credentials, mock_project_id)
 
+clients_patch = mock.patch('src.clients.GoogleClients')
+clients_patch.start()
+
 from src import main
 from src.main import Zone
-from src.main import WatcherParameters
+from src.watcher_settings import WatcherSettings
 
 auth_patch.stop()
+clients_patch.stop()
 
 class TestWatcherIntegration(unittest.TestCase):
 
@@ -42,10 +46,10 @@ class TestWatcherIntegration(unittest.TestCase):
     @mock.patch("google.cloud.devtools.cloudbuild.CloudBuildClient")
     @mock.patch("google.cloud.edgecontainer.EdgeContainerClient")
     @mock.patch("src.main.read_intent_data")
-    @mock.patch("src.main.get_parameters_from_environment")
+    @mock.patch("src.main.WatcherSettings")
     def test_zone_watcher_integration_multiple_stores(
         self,
-        mock_get_parameters,
+        mock_watcher_settings,
         mock_read_intent_data,
         mock_ec_client,
         mock_cb_client,
@@ -68,18 +72,18 @@ class TestWatcherIntegration(unittest.TestCase):
 
         # --- Setup Mock Data ---
         # Mock environment parameters
-        params = WatcherParameters(
+        params = WatcherSettings(
             project_id="test-project",
             secrets_project_id="test-project",
             region="us-central1",
-            cloud_build_trigger="projects/test-project/locations/us-central1/triggers/test-trigger",
+            cloud_build_trigger_name="test-trigger",
             git_secret_id="secret-id",
             source_of_truth_repo="test-repo",
             source_of_truth_branch="main",
             source_of_truth_path="main/",
         )
 
-        mock_get_parameters.return_value = params 
+        mock_watcher_settings.return_value = params 
 
         intent_data = generate_cluster_intent(number_of_projects, number_of_regions_within_project, number_of_stores_within_region)
         mock_read_intent_data.return_value = intent_data
@@ -119,10 +123,10 @@ class TestWatcherIntegration(unittest.TestCase):
     @mock.patch("google.cloud.edgenetwork.EdgeNetworkClient")
     @mock.patch("google.cloud.edgecontainer.EdgeContainerClient")
     @mock.patch("src.main.read_intent_data")
-    @mock.patch("src.main.get_parameters_from_environment")
+    @mock.patch("src.main.WatcherSettings")
     def test_cluster_watcher_integration_multiple_stores(
         self,
-        mock_get_parameters,
+        mock_watcher_settings,
         mock_read_intent_data,
         mock_ec_client,
         mock_en_client,
@@ -148,18 +152,18 @@ class TestWatcherIntegration(unittest.TestCase):
 
         # --- Setup Mock Data ---
         # Mock environment parameters
-        params = WatcherParameters(
+        params = WatcherSettings(
             project_id="test-project",
             secrets_project_id="test-project",
             region="us-central1",
-            cloud_build_trigger="projects/test-project/locations/us-central1/triggers/test-trigger",
+            cloud_build_trigger_name="test-trigger",
             git_secret_id="secret-id",
             source_of_truth_repo="test-repo",
             source_of_truth_branch="main",
             source_of_truth_path="main/",
         )
 
-        mock_get_parameters.return_value = params 
+        mock_watcher_settings.return_value = params 
 
         intent_data = generate_cluster_intent(number_of_projects, number_of_regions_within_project, number_of_stores_within_region)
         mock_read_intent_data.return_value = intent_data
