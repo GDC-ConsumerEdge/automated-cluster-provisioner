@@ -2,7 +2,6 @@ from typing import Optional, Annotated, Iterable
 from pydantic import BaseModel, ConfigDict, StringConstraints, validator
 from ipaddress import IPv4Network
 
-
 # https://www.ietf.org/rfc/rfc1035.txt
 RFC1035String = Annotated[str, StringConstraints(min_length=1, max_length=63, pattern="^[a-z]([-a-z0-9]*[a-z0-9])?")]
 
