@@ -1,6 +1,8 @@
 from dateutil.parser import parse
-from typing import MutableSequence, Self
+from typing import Self
 from google.cloud import edgecontainer
+
+from .cluster_intent_model import SourceOfTruthModel
 
 class MaintenanceExclusionWindow:
     def __init__(self, name, start_time, end_time):
@@ -15,15 +17,13 @@ class MaintenanceExclusionWindow:
         return hash((self.name, self.start_time, self.end_time))
 
     @staticmethod
-    def get_exclusion_windows_from_sot(store_info) -> set[Self]:
+    def get_exclusion_windows_from_sot(store_info: SourceOfTruthModel) -> set[Self]:
         exclusions = set()
 
-        number_of_defined_columns = len([key for key in store_info.keys() if key.startswith("maintenance_exclusion_name")])
-
-        for i in range(number_of_defined_columns):
-            exclusion_name = store_info.get(f"maintenance_exclusion_name_{i+1}")
-            exclusion_start = store_info.get(f"maintenance_exclusion_start_{i+1}")
-            exclusion_end = store_info.get(f"maintenance_exclusion_end_{i+1}")
+        for i in range(3):
+            exclusion_name = getattr(store_info, f"maintenance_exclusion_name_{i+1}")
+            exclusion_start = getattr(store_info, f"maintenance_exclusion_start_{i+1}")
+            exclusion_end = getattr(store_info, f"maintenance_exclusion_end_{i+1}")
 
             # Only consider exclusions that are fully defined
             if (exclusion_name and exclusion_start and exclusion_end):
