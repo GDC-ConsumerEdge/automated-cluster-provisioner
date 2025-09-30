@@ -51,3 +51,56 @@ class TestMain(unittest.TestCase):
     def test_zone_preparing(self):
         result = main.verify_zone_state(Zone.State.PREPARING, "mock_store_id", False)
         self.assertFalse(result)
+
+    @mock.patch('src.main.get_memberships')
+    @mock.patch('src.main.get_zones')
+    @mock.patch('src.main.clients.get_edgecontainer_client')
+    @mock.patch('src.main.clients.get_cloudbuild_client')
+    def test_cluster_watcher_worker_multi_project(
+        self,
+        mock_get_cloudbuild_client,
+        mock_get_edgecontainer_client,
+        mock_get_zones,
+        mock_get_memberships,
+    ):
+        # Arrange
+        mock_get_memberships.return_value = {}
+        mock_get_zones.return_value = {}
+        mock_edgecontainer_client = mock.MagicMock()
+        mock_get_edgecontainer_client.return_value = mock_edgecontainer_client
+        mock_edgecontainer_client.list_clusters.return_value = []
+        mock_edgecontainer_client.common_location_path.return_value = (
+            "projects/test-fleet-project/locations/test-location"
+        )
+
+        project_id = "test-fleet-project"
+        location = "test-location"
+
+        params = mock.MagicMock()
+        params.cloud_build_trigger = "test-trigger"
+
+        class MockStore:
+            def __init__(self, fleet_project_id, location, machine_project_id):
+                self.fleet_project_id = fleet_project_id
+                self.location = location
+                self.machine_project_id = machine_project_id
+
+        stores = {
+            "store1": MockStore(project_id, location, "machine-project-1"),
+            "store2": MockStore(project_id, location, "machine-project-2"),
+            "store3": MockStore(project_id, "other-location", "machine-project-3"),
+            "store4": MockStore("other-fleet-project", location, "machine-project-4"),
+        }
+
+        # Act
+        main._cluster_watcher_worker(project_id, location, stores, params)
+
+        # Assert
+        mock_get_zones.assert_has_calls(
+            [
+                mock.call("machine-project-1", location),
+                mock.call("machine-project-2", location),
+            ],
+            any_order=True,
+        )
+        self.assertEqual(mock_get_zones.call_count, 2)
