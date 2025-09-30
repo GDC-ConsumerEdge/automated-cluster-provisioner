@@ -1,5 +1,7 @@
 from typing import Optional, Annotated, Iterable
-from pydantic import BaseModel, ConfigDict, StringConstraints, IPvAnyNetwork, validator
+from pydantic import BaseModel, ConfigDict, StringConstraints, validator
+from ipaddress import IPv4Network
+
 
 # https://www.ietf.org/rfc/rfc1035.txt
 RFC1035String = Annotated[str, StringConstraints(min_length=1, max_length=63, pattern="^[a-z]([-a-z0-9]*[a-z0-9])?")]
@@ -16,8 +18,8 @@ class SourceOfTruthModel(BaseModel):
     cluster_name: RFC1035String
     location: RFC1035String
     node_count: int
-    cluster_ipv4_cidr: IPvAnyNetwork
-    services_ipv4_cidr: IPvAnyNetwork
+    cluster_ipv4_cidr: IPv4Network
+    services_ipv4_cidr: IPv4Network
     external_load_balancer_ipv4_address_pools: str
     sync_repo: str
     sync_branch: str
