@@ -24,4 +24,4 @@ jobs:
           python3 -m pip install .
           popd
 
-          validate_csv -v -m validation/cluster_intent.py example-source-of-truth.csv
+          validate_csv -v -m module/validation/cluster_intent.py example-source-of-truth.csv
