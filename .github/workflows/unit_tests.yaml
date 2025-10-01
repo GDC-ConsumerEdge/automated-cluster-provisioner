@@ -14,6 +14,6 @@ jobs:
           python-version: '3.12' 
       - name: run validator
         run: |
-          cd watchers
+          cd module/watchers
           python3 -m pip install -r src/requirements.txt
           python3 -m unittest

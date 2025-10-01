@@ -4,6 +4,15 @@ resource "time_sleep" "unknown-zone-timer" {
     create_duration = "30s"
 }
 
+resource "google_monitoring_notification_channel" "cp_notification_channel" {
+  display_name = "Cluster Provisioner Notification Channel"
+  type         = "email"
+  labels = {
+    email_address = var.notification_channel_email
+  }
+  force_delete = false
+}
+
 resource "google_monitoring_alert_policy" "unknown-zone-alert" {
   depends_on = [ time_sleep.unknown-zone-timer ]
   display_name = "Unknown Zone Alert"
@@ -29,6 +38,7 @@ resource "time_sleep" "cluster-creation-failure-timer" {
 resource "google_monitoring_alert_policy" "cluster-creation-failure-alert" {
   depends_on = [ time_sleep.cluster-creation-failure-timer ]
   display_name = "Cluster Creation Failure Alert"
+  notification_channels = [google_monitoring_notification_channel.cp_notification_channel.name]
   combiner = "OR"
   conditions {
     display_name = "Cluster Creation Failure Alert"
@@ -51,6 +61,7 @@ resource "time_sleep" "cluster-modify-failure-timer" {
 resource "google_monitoring_alert_policy" "cluster-modify-failure-alert" {
   depends_on = [ time_sleep.cluster-modify-failure-timer ]
   display_name = "Cluster Modify Failure Alert"
+  notification_channels = [google_monitoring_notification_channel.cp_notification_channel.name]
   combiner = "OR"
   conditions {
     display_name = "Cluster Modify Failure Alert"

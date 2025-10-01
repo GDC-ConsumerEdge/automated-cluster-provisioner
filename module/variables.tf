@@ -176,3 +176,9 @@ variable "opt_in_build_messages" {
   type        = bool
   default     = false
 }
+
+variable "notification_channel_email" {
+  description = "Notification Channel for Cluster Provisioner Alerts."
+  default     = ""
+  type        = string
+}
