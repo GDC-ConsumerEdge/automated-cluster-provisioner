@@ -72,6 +72,13 @@ resource "google_storage_bucket" "gdce-cluster-provisioner-bucket" {
   uniform_bucket_level_access = true
 }
 
+resource "google_storage_bucket_object" "fleet-packages-rbac" {
+  name         = "fleet-packages-rbac.yaml.template"
+  source       = "${path.module}/fleet-packages-rbac.yaml.template"
+  content_type = "text/plain"
+  bucket       = google_storage_bucket.gdce-cluster-provisioner-bucket.id
+}
+
 resource "google_storage_bucket_object" "apply-spec" {
   name         = "apply-spec.yaml.template"
   source       = "${path.module}/apply-spec.yaml.template"
