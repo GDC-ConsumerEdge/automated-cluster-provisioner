@@ -1,4 +1,0 @@
-environment   = "stg"
-store_id      = "usden66"
-project_id    = "cloud-alchemists-sandbox"
-region        = "us-central1"
