@@ -392,6 +392,7 @@ steps:
     gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
         --config=./apply-spec.yaml --project $FLEET_PROJECT_ID
 
+    gsutil cp gs://$CLUSTER_INTENT_BUCKET/fleet-packages-rbac.yaml.template .
     export PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format="value(projectNumber)")
     
     envsubst < fleet-packages-rbac.yaml.template > fleet-packages-rbac.yaml
