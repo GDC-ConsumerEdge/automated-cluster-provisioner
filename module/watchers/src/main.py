@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Dict, Tuple
+from typing import Dict, Set, Tuple
 import functions_framework
 import os
 import io
@@ -233,7 +233,17 @@ def _cluster_watcher_worker(
     cb_client = clients.get_cloudbuild_client()
     count = 0
 
-    zones = get_zones(project_id, location)
+    project_to_list_machines: Set[str] = set()
+
+    for store in stores.values():
+        if store.fleet_project_id == project_id and store.location == location:
+            project_to_list_machines.add(store.machine_project_id)
+
+    zones: Dict[str, ACPZone] = {}
+
+    for machine_projects in project_to_list_machines:
+        zones.update(get_zones(machine_projects, location))
+
     memberships = get_memberships(project_id, location)
 
     req_c = edgecontainer.ListClustersRequest(
