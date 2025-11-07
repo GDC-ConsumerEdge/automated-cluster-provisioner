@@ -392,6 +392,12 @@ steps:
     gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
         --config=./apply-spec.yaml --project $FLEET_PROJECT_ID
 
+    export PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format="value(projectNumber)")
+    
+    envsubst < fleet-packages-rbac.yaml.template > fleet-packages-rbac.yaml
+
+    kubectl apply -f fleet-packages-rbac.yaml
+
     # Apply old Group RBAC steps if cluster version is less than 1.10.0
     if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] &&  ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
       log_build_step "Configuring manual Group RBAC"

@@ -1,0 +1,58 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fleet-packages-impersonator
+rules:
+- apiGroups:
+  - ""
+  resourceNames:
+  - service-$PROJECT_NUMBER@gcp-sa-configdelivery.iam.gserviceaccount.com
+  resources:
+  - users
+  verbs:
+  - impersonate
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fleet-packages-impersonator-binding
+roleRef:
+  kind: ClusterRole
+  name: fleet-packages-impersonator
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+- kind: ServiceAccount
+  name: connect-agent-sa
+  namespace: gke-connect
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fleetpackages-configsync-admin
+rules:
+- apiGroups:
+  - "configsync.gke.io"
+  resources:
+  - rootsyncs
+  - reposyncs
+  verbs:
+  - "*"
+- apiGroups:
+  - "kpt.dev"
+  resources:
+  - resourcegroups
+  verbs:
+  - "*"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fleet-packages-configsync-admin-binding
+subjects:
+- kind: User
+  name: service-$PROJECT_NUMBER@gcp-sa-configdelivery.iam.gserviceaccount.com
+roleRef:
+  kind: ClusterRole
+  name: fleetpackages-configsync-admin
+  apiGroup: rbac.authorization.k8s.io
+EOF
