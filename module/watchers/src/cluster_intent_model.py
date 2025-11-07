@@ -1,6 +1,7 @@
 from typing import Optional, Annotated, Iterable
-from pydantic import BaseModel, StringConstraints, validator
+from pydantic import BaseModel, ConfigDict, StringConstraints, validator
 from ipaddress import IPv4Network
+
 
 # https://www.ietf.org/rfc/rfc1035.txt
 RFC1035String = Annotated[str, StringConstraints(min_length=1, max_length=63, pattern="^[a-z]([-a-z0-9]*[a-z0-9])?")]
@@ -8,6 +9,8 @@ RFC1035String = Annotated[str, StringConstraints(min_length=1, max_length=63, pa
 ProjectIdString = Annotated[str, StringConstraints(min_length=6, max_length=30, pattern="^[a-z]([-a-z0-9]*[a-z0-9])?")]
 
 class SourceOfTruthModel(BaseModel):
+    model_config = ConfigDict(extra='allow')
+
     store_id: RFC1035String
     zone_name: Optional[str] = None
     machine_project_id: ProjectIdString
@@ -36,10 +39,10 @@ class SourceOfTruthModel(BaseModel):
     maintenance_exclusion_name_3: Optional[str] = None
     maintenance_exclusion_start_3: Optional[str] = None
     maintenance_exclusion_end_3: Optional[str] = None
-    subnet_vlans: Optional[str]
+    subnet_vlans: Optional[str] = None
     labels: Optional[str] = None
     backup_enable: Optional[bool] = None
-    recreate_on_delete: Optional[bool]
+    recreate_on_delete: Optional[bool] = None
 
     @validator('*', pre=True)
     def convert_to_none(cls, v):
