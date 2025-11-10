@@ -425,8 +425,10 @@ steps:
       [[ ${count} -ge ${max_retries_for_healthcheck_creation} ]] && die "Health check resource not created after 20min"
 
       log_build_step "Waiting for platform healthchecks to pass"
-      kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy \
-          --timeout=1h || die "Platform is not healthy after 1h"
+      if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy --timeout=1h; then
+        kubectl describe healthchecks.validator.gdc.gke.io/default
+        die "Platform is not healthy after 1h"
+      fi
 
       # Calculate workload timeout by removing non-workload related buffer time from the over build timeout.
       # ($TIMEOUT_IN_SECONDS) - (1h for platform health) - (1h for cluster health)
@@ -434,8 +436,10 @@ steps:
       WORKLOAD_TIMEOUT="$(($TIMEOUT_IN_SECONDS-"9600"))"
 
       log_build_step "Waiting for workload healthchecks to pass"
-      kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy \
-          --timeout="${WORKLOAD_TIMEOUT}s" || die "Workloads are not healthy after ${WORKLOAD_TIMEOUT}s"
+      if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy --timeout="${WORKLOAD_TIMEOUT}s"; then
+        kubectl describe healthchecks.validator.gdc.gke.io/default
+        die "Workloads are not healthy after ${WORKLOAD_TIMEOUT}s"
+      fi
     fi
     
     set -eE
