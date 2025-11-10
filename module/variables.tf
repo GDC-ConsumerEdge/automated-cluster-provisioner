@@ -182,3 +182,15 @@ variable "notification_channel_email" {
   default     = ""
   type        = string
 }
+
+variable "vpc_connector" {
+  description = "VPC connector for the cloud functions"
+  type        = string
+  default     = null
+}
+
+variable "vpc_connector_egress_settings" {
+  description = "VPC connector egress settings for the cloud functions"
+  type        = string
+  default     = null
+}

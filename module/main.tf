@@ -205,15 +205,15 @@ resource "google_project_iam_member" "gdce-provisioning-agent-secret-accessor" {
 //   on subsequent `tf plan/apply` or carried over from the plan to the apply. 
 resource "random_uuid" "watcher-src-uuid" {
   keepers = {
-    for file in fileset("../watchers/src", "**/*") :
-    file => filemd5("../watchers/src/${file}")
+    for file in fileset("${path.module}/watchers/src", "**/*") :
+    file => filemd5("${path.module}/watchers/src/${file}")
   }
 }
 
 data "archive_file" "watcher-src" {
   type        = "zip"
   output_path = "/tmp/watcher_src-${resource.random_uuid.watcher-src-uuid.result}.zip"
-  source_dir  = "../watchers/src/"
+  source_dir  = "${path.module}/watchers/src/"
 }
 
 resource "google_storage_bucket_object" "watcher-src" {
@@ -287,84 +287,7 @@ resource "google_project_iam_member" "zone-watcher-builder-roles" {
   member  = google_service_account.zone-watcher-builder.member
 }
 
-# VPC for Cloud Functions
-resource "google_compute_network" "function_vpc" {
-  name                    = "cloud-functions-vpc-${var.environment}"
-  project                 = var.project_id
-  auto_create_subnetworks = false
-}
 
-# Create an IP address
-resource "google_compute_global_address" "private_ip_alloc" {
-  name          = "private-ip-alloc-${var.environment}"
-  purpose       = "VPC_PEERING"
-  address_type  = "INTERNAL"
-  prefix_length = 16
-  network       = google_compute_network.function_vpc.id
-}
-
-# Create a private connection
-resource "google_service_networking_connection" "default" {
-  network                 = google_compute_network.function_vpc.self_link
-  service                 = "servicenetworking.googleapis.com"
-  reserved_peering_ranges = [google_compute_global_address.private_ip_alloc.name]
-}
-
-# Import or export custom routes
-resource "google_compute_network_peering_routes_config" "peering_routes" {
-  peering = google_service_networking_connection.default.peering
-  network = google_compute_network.function_vpc.name
-
-  import_custom_routes = true
-  export_custom_routes = true
-}
-
-resource "google_compute_subnetwork" "function_subnet" {
-  name          = "cloud-functions-subnet-${var.environment}"
-  region        = var.region
-  network       = google_compute_network.function_vpc.name
-  ip_cidr_range = "10.0.0.0/28"
-  log_config {
-    aggregation_interval = "INTERVAL_10_MIN"
-    flow_sampling        = 0.5
-    metadata             = "INCLUDE_ALL_METADATA"
-  }
-  private_ip_google_access = true
-}
-
-# VPC Serverless Connector
-resource "google_vpc_access_connector" "connector" {
-  name   = "serverless-connector-${var.environment}"
-  region = var.region
-  # network = google_compute_network.function_vpc.name
-  subnet {
-    name = google_compute_subnetwork.function_subnet.name
-  }
-  min_instances = 2
-  max_instances = 3
-}
-
-# Private Cloud Build Worker Pool
-resource "google_cloudbuild_worker_pool" "private_pool" {
-  name     = "private-build-pool-${var.environment}"
-  location = var.region
-  network_config {
-    peered_network = google_compute_network.function_vpc.id
-  }
-}
-resource "google_compute_router" "nat_router" {
-  name    = "nat-router-${var.environment}"
-  region  = google_compute_subnetwork.function_subnet.region
-  network = google_compute_network.function_vpc.name
-}
-
-resource "google_compute_router_nat" "nat_gateway" {
-  name                               = "nat-gateway-${var.environment}"
-  router                             = google_compute_router.nat_router.name
-  region                             = google_compute_subnetwork.function_subnet.region
-  nat_ip_allocate_option             = "AUTO_ONLY"
-  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
-}
 
 # zone-watcher cloud function
 resource "google_cloudfunctions2_function" "zone-watcher" {
@@ -407,6 +330,8 @@ resource "google_cloudfunctions2_function" "zone-watcher" {
       MAX_WORKERS                               = "20"
     }
     service_account_email = google_service_account.zone-watcher-agent.email
+    vpc_connector         = var.vpc_connector
+    vpc_connector_egress_settings = var.vpc_connector_egress_settings
   }
 }
 
@@ -477,6 +402,8 @@ resource "google_cloudfunctions2_function" "cluster-watcher" {
       MAX_WORKERS                               = "20"
     }
     service_account_email = google_service_account.zone-watcher-agent.email
+    vpc_connector         = var.vpc_connector
+    vpc_connector_egress_settings = var.vpc_connector_egress_settings
   }
 }
 
@@ -545,6 +472,8 @@ resource "google_cloudfunctions2_function" "zone-active-metric" {
       GIT_SECRET_ID                             = var.git_secret_id
     }
     service_account_email = google_service_account.zone-watcher-agent.email
+    vpc_connector         = var.vpc_connector
+    vpc_connector_egress_settings = var.vpc_connector_egress_settings
   }
 }
 
