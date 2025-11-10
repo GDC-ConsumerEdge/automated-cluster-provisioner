@@ -55,4 +55,3 @@ roleRef:
   kind: ClusterRole
   name: fleetpackages-configsync-admin
   apiGroup: rbac.authorization.k8s.io
-EOF
