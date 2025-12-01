@@ -243,7 +243,7 @@ resource "google_project_iam_member" "zone-watcher-agent-fleet-roles" {
     "roles/edgecontainer.viewer",
     "roles/edgenetwork.viewer",
     "roles/gkehub.viewer",
-    "roles/gdchardwaremanagement.reader",
+    "roles/gdchardwaremanagement.operator",
   ])
 
   project = local.project_id_fleet
