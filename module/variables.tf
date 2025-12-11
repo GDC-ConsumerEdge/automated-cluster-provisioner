@@ -141,6 +141,11 @@ variable "gke_hub_api_endpoint_override" {
   default     = ""
 }
 
+variable "connect_gateway_api_endpoint_override" {
+  description = "Google Connect Gateway API. Leave empty to use default api endpoint."
+  default     = ""
+}
+
 variable "hardware_management_api_endpoint_override" {
   description = "Google Distributed Hardware Management API. Leave empty to use default api endpoint."
   default     = ""
