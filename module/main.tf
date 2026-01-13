@@ -20,6 +20,7 @@ locals {
     var.edge_container_api_endpoint_override != "" ? { _EDGE_CONTAINER_API_ENDPOINT_OVERRIDE = var.edge_container_api_endpoint_override } : {},
     var.edge_network_api_endpoint_override != "" ? { _EDGE_NETWORK_API_ENDPOINT_OVERRIDE = var.edge_network_api_endpoint_override } : {},
     var.gke_hub_api_endpoint_override != "" ? { _GKEHUB_API_ENDPOINT_OVERRIDE = var.gke_hub_api_endpoint_override } : {},
+    var.connect_gateway_api_endpoint_override != "" ? { _CONNECTGATEWAY_API_ENDPOINT_OVERRIDE = var.connect_gateway_api_endpoint_override } : {},
     var.hardware_management_api_endpoint_override != "" ? { _HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override } : {},
     { _SOURCE_OF_TRUTH_REPO = var.source_of_truth_repo },
     { _SOURCE_OF_TRUTH_BRANCH = var.source_of_truth_branch },
@@ -394,6 +395,7 @@ resource "google_cloudfunctions2_function" "cluster-watcher" {
       EDGE_NETWORK_API_ENDPOINT_OVERRIDE        = var.edge_network_api_endpoint_override
       HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE = var.hardware_management_api_endpoint_override
       GKEHUB_API_ENDPOINT_OVERRIDE              = var.gke_hub_api_endpoint_override
+      CONNECTGATEWAY_API_ENDPOINT_OVERRIDE      = var.connect_gateway_api_endpoint_override
       SOURCE_OF_TRUTH_REPO                      = var.source_of_truth_repo
       SOURCE_OF_TRUTH_BRANCH                    = var.source_of_truth_branch
       SOURCE_OF_TRUTH_PATH                      = var.source_of_truth_path
