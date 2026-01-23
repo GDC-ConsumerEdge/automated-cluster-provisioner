@@ -1,0 +1,5 @@
+google-cloud-gdchardwaremanagement
+google-cloud-firestore
+google-cloud-pubsub
+google-auth
+functions-framework
