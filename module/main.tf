@@ -33,6 +33,7 @@ locals {
     var.skip_identity_service == true ? { _SKIP_IDENTITY_SERVICE = "TRUE" } : {_SKIP_IDENTITY_SERVICE = "FALSE"},
     var.bart_create_bucket == true ? { _BART_CREATE_BUCKET = "TRUE" } : { _BART_CREATE_BUCKET = "FALSE" },
     var.opt_in_build_messages == true ? { _OPT_IN_BUILD_MESSAGES = "TRUE" } : { _OPT_IN_BUILD_MESSAGES = "FALSE" },
+    var.enable_robin_cns == true ? { _ENABLE_ROBIN_CNS = "TRUE" } : { _ENABLE_ROBIN_CNS = "FALSE" },
   )
   project_id_fleet   = coalesce(var.project_id_fleet, var.project_id)
   project_id_secrets = coalesce(var.project_id_secrets, var.project_id)
