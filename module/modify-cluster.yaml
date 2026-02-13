@@ -245,7 +245,7 @@ steps:
     ROBIN_CNS_ARG=""
     if [[ "${ENABLE_ROBIN_CNS}" == "TRUE" ]] && gdc_version_evaluate "${CLUSTER_VERSION}" "1.12.0"; then
       echo "Enabling Robin CNS"
-      gcloud edge-cloud container clusters update $CLUSTER_NAME \
+      gcloud alpha edge-cloud container clusters update $CLUSTER_NAME \
         --project=$FLEET_PROJECT_ID \
         --location=$LOCATION \
         --enable-robin-cns

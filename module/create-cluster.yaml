@@ -293,10 +293,14 @@ steps:
       # This is used to output the opid before the operation has completed
       exec 5>&1
 
+      GCLOUD_CMD="gcloud"
+
       ROBIN_CNS_ARG=""
       if [[ "${ENABLE_ROBIN_CNS}" == "TRUE" ]] && gdc_version_evaluate "${CLUSTER_VERSION}" "1.12.0"; then
-        log_build_step "Enabling Robin CNS"
+        log_build_step "Creating cluster with Robin CNS enabled"
         ROBIN_CNS_ARG="--enable-robin-cns"
+        # Update command to use alpha until this flag is GA'ed
+        GCLOUD_CMD="gcloud alpha"
       fi
 
       IDENTITY_SERVICE_ARG=""
@@ -308,7 +312,7 @@ steps:
       fi
 
       out=$(
-        gcloud edge-cloud container clusters create $CLUSTER_NAME \
+        ${GCLOUD_CMD} edge-cloud container clusters create $CLUSTER_NAME \
           --control-plane-node-location=$NODE_LOCATION \
           --control-plane-node-count=$NODE_COUNT \
           --cluster-ipv4-cidr=$CLUSTER_IPV4_CIDR \
