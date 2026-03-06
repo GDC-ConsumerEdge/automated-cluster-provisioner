@@ -293,6 +293,16 @@ steps:
       # This is used to output the opid before the operation has completed
       exec 5>&1
 
+      GCLOUD_CMD="gcloud"
+
+      ROBIN_CNS_ARG=""
+      if [[ "${ENABLE_ROBIN_CNS}" == "TRUE" ]] && gdc_version_evaluate "${CLUSTER_VERSION}" "1.12.0"; then
+        log_build_step "Creating cluster with Robin CNS enabled"
+        ROBIN_CNS_ARG="--enable-robin-cns"
+        # Update command to use alpha until this flag is GA'ed
+        GCLOUD_CMD="gcloud alpha"
+      fi
+
       IDENTITY_SERVICE_ARG=""
       if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] && gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
         log_build_step "Creating cluster with Group RBAC"
@@ -302,7 +312,7 @@ steps:
       fi
 
       out=$(
-        gcloud edge-cloud container clusters create $CLUSTER_NAME \
+        ${GCLOUD_CMD} edge-cloud container clusters create $CLUSTER_NAME \
           --control-plane-node-location=$NODE_LOCATION \
           --control-plane-node-count=$NODE_COUNT \
           --cluster-ipv4-cidr=$CLUSTER_IPV4_CIDR \
@@ -314,6 +324,7 @@ steps:
           --release-channel=NONE \
           --version $CLUSTER_VERSION \
           --offline-reboot-ttl=7d \
+          ${ROBIN_CNS_ARG} \
           ${IDENTITY_SERVICE_ARG} 2>&1 | tee /dev/fd/5
         )
 
@@ -504,6 +515,7 @@ steps:
   - 'MAX_RETRIES=$_MAX_RETRIES'
   - 'TRIGGER_NAME=$TRIGGER_NAME'
   - 'OPT_IN_BUILD_MESSAGES=$_OPT_IN_BUILD_MESSAGES'
+  - 'ENABLE_ROBIN_CNS=$_ENABLE_ROBIN_CNS'
 
 options:
   logging: CLOUD_LOGGING_ONLY

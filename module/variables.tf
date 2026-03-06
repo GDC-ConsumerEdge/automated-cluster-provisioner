@@ -199,3 +199,9 @@ variable "vpc_connector_egress_settings" {
   type        = string
   default     = null
 }
+
+variable "enable_robin_cns" {
+  description = "Enable Robin Cloud Native Storage (CNS)"
+  type        = bool
+  default     = false
+}
