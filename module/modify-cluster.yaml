@@ -22,9 +22,13 @@ steps:
     set +x
     set -o pipefail
 
+    function log() {
+      echo "[Build: ${BUILD_ID}] $1"
+    }
+
     function die() {
-      echo "$1"
-      echo "Cluster Modify Failed: $CLUSTER_NAME"
+      log "$1"
+      log "Cluster Modify Failed: $CLUSTER_NAME"
       exit 1
     }
 
@@ -202,9 +206,10 @@ steps:
       fi
     done
 
-    echo "Cluster Modify Succeeded: $CLUSTER_NAME"
+    log "Cluster Modify Succeeded: $CLUSTER_NAME"
 
   env:
+  - 'BUILD_ID=$BUILD_ID'
   - 'EDGE_CONTAINER_API_ENDPOINT_OVERRIDE=$_EDGE_CONTAINER_API_ENDPOINT_OVERRIDE'
   - 'EDGE_NETWORK_API_ENDPOINT_OVERRIDE=$_EDGE_NETWORK_API_ENDPOINT_OVERRIDE'
   - 'GKEHUB_API_ENDPOINT_OVERRIDE=$_GKEHUB_API_ENDPOINT_OVERRIDE'

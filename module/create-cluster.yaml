@@ -29,11 +29,11 @@ steps:
     HARDWARE_MANAGEMENT_API_VERSION="v1alpha"
 
     function die() {
-      step=$1
+      step="[Build: ${BUILD_ID}] $1"
       details=$2
       echo "$step"
       echo "$details"
-      echo "Cluster Creation Failed: $CLUSTER_NAME"
+      echo "[Build: ${BUILD_ID}] Cluster Creation Failed: $CLUSTER_NAME"
 
       if [[ "$MAX_RETRIES" -eq 0 ]]; then
         echo "Marking zone as failed"
@@ -54,8 +54,8 @@ steps:
     }
 
     log_build_step() {
-      message=$1
-      echo $message
+      message="[Build: ${BUILD_ID}] $1"
+      echo "$message"
 
       zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_STARTED "$message"
     }
@@ -506,6 +506,7 @@ steps:
     echo "Cluster Creation Succeeded: $CLUSTER_NAME"
 
   env:
+  - 'BUILD_ID=$BUILD_ID'
   - 'EDGE_CONTAINER_API_ENDPOINT_OVERRIDE=$_EDGE_CONTAINER_API_ENDPOINT_OVERRIDE'
   - 'EDGE_NETWORK_API_ENDPOINT_OVERRIDE=$_EDGE_NETWORK_API_ENDPOINT_OVERRIDE'
   - 'GKEHUB_API_ENDPOINT_OVERRIDE=$_GKEHUB_API_ENDPOINT_OVERRIDE'
