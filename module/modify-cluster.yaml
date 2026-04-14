@@ -56,13 +56,13 @@ steps:
       echo "$output"
     }
 
+    # Preemptively install required packages silently to maintain clean visual layouts
+    apt-get update -qq && apt-get install -y -qq gettext-base csvtool jq > /dev/null
+
     [[ -z "${STORE_ID}" ]] && die "STORE_ID not set"
 
     NODE_LOCATION=${ZONE}
     [[ -z "$NODE_LOCATION" ]] && die "ZONE not set"
-
-    apt-get update
-    apt-get install -y gettext-base csvtool jq
 
     TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID \
         --project $GIT_SECRETS_PROJECT_ID)

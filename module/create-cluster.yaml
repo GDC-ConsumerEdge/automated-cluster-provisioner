@@ -29,6 +29,7 @@ steps:
     HARDWARE_MANAGEMENT_API_VERSION="v1alpha"
 
     function die() {
+      set +x
       step="[Build: ${BUILD_ID}] $1"
       details=$2
       echo "$step"
@@ -53,12 +54,13 @@ steps:
       exit 1
     }
 
-    log_build_step() {
+    log_build_step() (
+      set +x
       message="[Build: ${BUILD_ID}] $1"
       echo "$message"
 
       zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_STARTED "$message"
-    }
+    )
 
     # Sets the `UNDER_FACTORY_CHECKS` to either true if ZoneState is ready, started, or failed
     # or false for all other ZoneStates or for provisioning that bypasses the ZoneState.
@@ -211,13 +213,13 @@ steps:
       fi
     }
 
+    # Preemptively install required packages silently to maintain clean visual layouts
+    apt-get update -qq && apt-get install -y -qq gettext-base csvtool jq > /dev/null
+
     [[ -z "${STORE_ID}" ]] && die "STORE_ID not set"
 
     NODE_LOCATION=${ZONE}
     [[ -z "$NODE_LOCATION" ]] && die "ZONE not set"
-
-    apt-get update
-    apt-get install -y gettext-base csvtool jq
 
     TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID)
     git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo
@@ -283,6 +285,8 @@ steps:
     fi
 
     log_build_step "Beginning provisioning"
+  
+    set -x
 
     gcloud edge-cloud container clusters describe $CLUSTER_NAME --location $LOCATION \
         --project $FLEET_PROJECT_ID --verbosity none
@@ -344,6 +348,7 @@ steps:
 
     fi
 
+    set +x
     if [[ -z "${MAINTENANCE_WINDOW_START}" || -z ${MAINTENANCE_WINDOW_END} || \
             -z ${MAINTENANCE_WINDOW_RECURRENCE} ]]; then
       log_build_step "All maintenance window fields are not set, skipping"
@@ -390,8 +395,9 @@ steps:
     done
 
     set -eE
-    trap 'die "Error configuring cluster"' ERR
+    trap 'die "Error configuring cluster" "Command that failed: $BASH_COMMAND"' ERR
 
+    set -x
     if [ -n "$LABELS" ]; then
       log_build_step "Adding fleet membership labels"
       gcloud container fleet memberships update $CLUSTER_NAME --clear-labels --update-labels $LABELS
@@ -407,16 +413,29 @@ steps:
     fi
 
     envsubst < apply-spec.yaml.template > apply-spec.yaml
-
+    set +x
     log_build_step "Configuring configsync"
     gcloud secrets versions access latest --secret=$GIT_TOKEN_SECRETS_MANAGER_NAME \
         --project $SECRETS_PROJECT_ID >> "$(pwd)/git-creds"
 
+    set -x
     kubectl create ns config-management-system --dry-run=client -o yaml | kubectl apply -f -
+    # Capture PIPESTATUS to catch errors occurring in both components of the pipe
+    rcs=("${PIPESTATUS[@]}")
+    if [[ ${rcs[0]} -ne 0 ]] || [[ ${rcs[1]} -ne 0 ]]; then
+      die "Failed to create namespace config-management-system" "Exit codes: ${rcs[*]}"
+    fi
+    set +x
 
     kubectl create secret generic git-creds --namespace="config-management-system" \
         --from-literal=username=default --from-file=token="$(pwd)/git-creds" \
         --dry-run=client -o yaml | kubectl apply -f -
+    rcs=("${PIPESTATUS[@]}")
+    set -x
+    # Capture PIPESTATUS to catch errors occurring in both components of the pipe
+    if [[ ${rcs[0]} -ne 0 ]] || [[ ${rcs[1]} -ne 0 ]]; then
+      die "Failed to create secret git-creds" "Exit codes: ${rcs[*]}"
+    fi
 
     gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
         --config=./apply-spec.yaml --project $FLEET_PROJECT_ID
@@ -438,7 +457,7 @@ steps:
       log_build_step "Skipping manual Group RBAC setup"
     fi
 
-    set +eE
+    set +x +eE
     trap - ERR
 
     if [ -z "${SKIP_HEALTH_CHECK}" ]; then
@@ -472,7 +491,7 @@ steps:
     fi
     
     set -eE
-    trap 'die "Error shutting down VMs"' ERR
+    trap 'die "Error shutting down VMs" "Command that failed: $BASH_COMMAND"' ERR
 
     export VIRTCTL_VERSION=v1.2.2
     curl -L https://github.com/kubevirt/kubevirt/releases/download/${VIRTCTL_VERSION}/virtctl-${VIRTCTL_VERSION}-linux-amd64 -o virtctl
