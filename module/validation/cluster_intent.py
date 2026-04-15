@@ -1,5 +1,5 @@
 from typing import Optional, Annotated, Iterable
-from pydantic import BaseModel, StringConstraints, validator, root_validator
+from pydantic import BaseModel, StringConstraints, validator, field_validator, ValidationInfo
 from ipaddress import IPv4Network
 
 # https://www.ietf.org/rfc/rfc1035.txt
@@ -54,18 +54,19 @@ class SourceOfTruthModel(BaseModel):
         else:
             return v
 
-    @root_validator(skip_on_failure=True)
-    def check_robin_cns_version(cls, values):
-        enable_robin_cns = values.get('enable_robin_cns')
-        cluster_version = values.get('cluster_version')
-        
-        if enable_robin_cns is True and cluster_version:
-            try:
-                version_parts = cluster_version.split('-')[0].split('.')
-                major = int(version_parts[0])
-                minor = int(version_parts[1])
+    @field_validator('enable_robin_cns')
+    @classmethod
+    def check_robin_cns_version(cls, v, info):
+        if v is True:
+            cluster_version = info.data.get('cluster_version')
+            if cluster_version:
+                try:
+                    version_parts = cluster_version.split('-')[0].split('.')
+                    major = int(version_parts[0])
+                    minor = int(version_parts[1])
+                except (IndexError, ValueError):
+                     raise ValueError(f"Invalid cluster version format: {cluster_version}")
+                
                 if major < 1 or (major == 1 and minor < 12):
                     raise ValueError(f"Robin CNS is only supported for GDC versions 1.12.0 or higher. Current version: {cluster_version}")
-            except (IndexError, ValueError):
-                 raise ValueError(f"Invalid cluster version format: {cluster_version}")
-        return values
+        return v
