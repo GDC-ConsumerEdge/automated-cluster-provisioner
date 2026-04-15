@@ -305,11 +305,15 @@ steps:
       GCLOUD_CMD="gcloud"
 
       ROBIN_CNS_ARG=""
-      if [[ "${ENABLE_ROBIN_CNS,,}" == "true" ]] && gdc_version_evaluate "${CLUSTER_VERSION}" "1.12.0"; then
-        log_build_step "Creating cluster with Robin CNS enabled"
-        ROBIN_CNS_ARG="--enable-robin-cns"
-        # Update command to use alpha until this flag is GA'ed
-        GCLOUD_CMD="gcloud alpha"
+      if [[ "${ENABLE_ROBIN_CNS,,}" == "true" ]]; then
+        if gdc_version_evaluate "${CLUSTER_VERSION}" "1.12.0"; then
+          log_build_step "Creating cluster with Robin CNS enabled"
+          ROBIN_CNS_ARG="--enable-robin-cns"
+          # Update command to use alpha until this flag is GA'ed
+          GCLOUD_CMD="gcloud alpha"
+        else
+          die "Robin CNS is only supported for GDC versions 1.12.0 or higher. Current version: ${CLUSTER_VERSION}"
+        fi
       fi
 
       CMD_ARGS=(
