@@ -42,6 +42,7 @@ class SourceOfTruthModel(BaseModel):
     labels: Optional[str] = None
     backup_enable: Optional[bool] = None
     recreate_on_delete: Optional[bool] = None
+    enable_robin_cns: Optional[bool] = None
 
     @validator('*', pre=True)
     def convert_to_none(cls, v):

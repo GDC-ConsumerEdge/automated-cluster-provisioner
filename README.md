@@ -157,6 +157,7 @@ The expected sequence to order a GDC Edge Zone with a provisioned cluster would 
 | maintenance_exclusion_end_1               | no       | (Optional.) End of maintenance exclusion window. Supports up to 3 exclusion windows by specifying additional columns `maintenance_exclusion_end_2` and `maintenance_exclusion_end_3`                                          |
 | subnet_vlans                              | no       | This is used in the cluster provisioning automation to call the edge network API to create a VLANs for a particular edge-zone                                                                                                 |
 | recreate_on_delete                        | yes      | Whether to recreate a cluster with a zone state of `ACTIVE`. This can be used for automated re-provisioning (delete the cluster and it'll automatically re-create).                                                           |
+| enable_robin_cns                          | no       | (Optional.) Set to `true` to enable Robin Cloud Native Storage on supported clusters (version 1.12.0+).                                                                                                                       |
 
 ### Cluster Intent Validation
 
