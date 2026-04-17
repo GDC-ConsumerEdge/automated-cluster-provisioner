@@ -12,8 +12,17 @@ class BuildSummary:
     numberOfBuilds: int = 0
     numberOfFailures: int = 0
     retriable: bool = False
+    latest_try_count: int = 0
 
     def add_build(self, build: cloudbuild.Build):
+        # NOTE on processing order and retry logic:
+        # 1. Processing Order: Since ListBuilds returns newest first, this loop processes builds from newest to oldest.
+        # 2. Logic Intent: This logic effectively finds the most recent non-failure build (moving backwards in time)
+        #    and uses its status to determine if we should retry.
+        # 3. Retry Condition: It will only allow a retry if the newest build failed AND the cluster has not succeeded
+        #    in any of the previous recorded attempts in this history window.
+        # 4. Usage Context: Note that this `retriable` result is only checked in main.py when cluster_exists is True
+        #    or when there are not enough free machines.
         self.numberOfBuilds += 1
 
         if build.status not in (
@@ -43,11 +52,7 @@ class BuildSummary:
             # Any status in this category can be treated as a failure
             self.retriable = True
 
-    def is_retriable(self, max_retries: int):
-        if self.numberOfFailures > max_retries:
-            return False
-        
-        return self.retriable
+
 
 
 class BuildHistory:
@@ -109,10 +114,13 @@ class BuildHistory:
                 break
 
             zone = ""
+            intent_hash = ""
 
             for key in response.substitutions:
                 if key == "_ZONE":
                     zone = response.substitutions[key]
+                elif key == "_INTENT_HASH":
+                    intent_hash = response.substitutions[key]
 
             if not zone:
                 # Builds are expected to have the _ZONE substitution. This is the value that is
@@ -120,32 +128,48 @@ class BuildHistory:
                 logging.warning(f"build found without _ZONE substitution, skipping... Build ID: {response.id}")
                 continue
 
-            if zone in build_summary_dict:
-                summary = build_summary_dict[zone]
+            key = (zone, intent_hash)
+
+            if key in build_summary_dict:
+                summary = build_summary_dict[key]
                 summary.add_build(response)
             else:
                 summary = BuildSummary()
+                try_count_str = response.substitutions.get("_TRY_COUNT", "0")
+                summary.latest_try_count = int(try_count_str)
                 summary.add_build(response)
-                build_summary_dict[zone] = summary
+                logger.info(f"Found latest build for zone {zone} with hash {intent_hash}. Latest try_count={summary.latest_try_count}")
+                build_summary_dict[key] = summary
 
         return build_summary_dict
 
-    def should_retry_zone_build(self, zone_name: str):
+    def should_retry_zone_build(self, zone_name: str, intent_hash: str):
         """
         Determines if a build should be retried or not. `False` is returned in the event 
         of no build history for a zone. 
 
         Args:
             zone_name: The name of the zone
+            intent_hash: The hash of the cluster intent
         """
         if not zone_name:
             raise Exception('missing zone_name')
         
-        if zone_name not in self.builds:
+        key = (zone_name, intent_hash)
+        if key not in self.builds:
             return False
         else:
-            build = self.builds[zone_name]
-            return build.is_retriable(self.max_retries)
+            build = self.builds[key]
+            return build.retriable
+
+    def get_latest_try_count(self, zone_name: str, intent_hash: str) -> int:
+        """
+        Returns the latest try count for a zone and intent hash.
+        """
+        key = (zone_name, intent_hash)
+        if key not in self.builds:
+            return 0
+        return self.builds[key].latest_try_count
 
         
         
