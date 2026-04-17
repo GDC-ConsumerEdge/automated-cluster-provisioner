@@ -20,6 +20,8 @@ import flask
 from collections import defaultdict
 import csv
 import logging
+import json
+import hashlib
 from google.api_core.operation import Operation
 from pydantic import ValidationError
 import requests
@@ -125,27 +127,49 @@ def _zone_watcher_worker(
                 logger.info(f'ZONE {zone}: {m.name} is a free node')
                 count_of_free_machines = count_of_free_machines+1
 
-        if cluster_exists and not builds.should_retry_zone_build(zone):
+        zone_state = zones[zone_store_id].state
+ 
+        if cluster_exists and not builds.should_retry_zone_build(zone, store_info.intent_hash):
             logger.info(f'Cluster already exists for {zone}. Skipping..')
             continue
-
+ 
         if count_of_free_machines >= int(store_info.node_count):
             logger.info(f'ZONE {zone}: There are enough free  nodes to create cluster')
         else:
             logger.info(f'ZONE {zone}: Not enough free  nodes to create cluster. Need {str(store_info.node_count)} but have {str(count_of_free_machines)} free nodes')
-            if not builds.should_retry_zone_build(zone):
+            if not builds.should_retry_zone_build(zone, store_info.intent_hash):
                 continue
-
-        if zone_name_retrieved_from_api and not verify_zone_state(zones[zone_store_id].state ,zone_store_id, store_info.recreate_on_delete):
+ 
+        if zone_name_retrieved_from_api and not verify_zone_state(zone_state, zone_store_id, store_info.recreate_on_delete):
             logger.info(f'Zone: {zone}, Store: {store_id} is not in expected state! skipping..')
             continue
-
+ 
+        # Determine the try count for the next build.
+        # If state is READY, it's a fresh start (or manual reset), so start at 1.
+        # If state is STARTED, it's a continuation of an attempt, so increment from history.
+        try_count = 1
+        if zone_state == Zone.State.READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS:
+            logger.info(f'Zone {zone} is in READY state. Starting with try_count=1.')
+            try_count = 1
+        elif zone_state == Zone.State.CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED:
+            latest_try = builds.get_latest_try_count(zone, store_info.intent_hash)
+            try_count = latest_try + 1
+            logger.info(f'Zone {zone} is in STARTED state. Latest try_count from history was {latest_try}. Setting next try_count={try_count}.')
+            
+        # Pre-emptively skip if we have exceeded the allowed attempts (max_retries + 1).
+        # This avoids triggering a build that we know will fail in the Bash script.
+        if try_count > params.max_retries + 1:
+            logger.info(f'Max retries reached for zone {zone} (try_count={try_count}, max_retries={params.max_retries}). Skipping..')
+            continue
+ 
         # trigger cloudbuild to initiate the cluster building
         repo_source = cloudbuild.RepoSource()
         repo_source.branch_name = store_info.sync_branch
         repo_source.substitutions = {
             "_STORE_ID": store_id,
-            "_ZONE": zone
+            "_ZONE": zone,
+            "_INTENT_HASH": store_info.intent_hash,
+            "_TRY_COUNT": str(try_count)
         }
         req = cloudbuild.RunBuildTriggerRequest(
             name=params.cloud_build_trigger,
@@ -529,8 +553,13 @@ def read_intent_data(params, named_key) -> Dict[Tuple, Dict[str, SourceOfTruthMo
         if proj_loc_key not in config_zone_info.keys():
             config_zone_info[proj_loc_key] = {}
 
+        # Calculate hash of the row
+        row_str = json.dumps(row, sort_keys=True)
+        intent_hash = hashlib.sha256(row_str.encode()).hexdigest()
+
         try:
             edge_zone = SourceOfTruthModel.model_validate(row)
+            edge_zone.intent_hash = intent_hash
         except ValidationError as e:
             logger.error(f"Invalid row detected in source of truth: {e.errors()}")
             continue

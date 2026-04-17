@@ -39,14 +39,13 @@ steps:
         echo "Marking zone as failed"
         zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
       else
-        # Will include the current build as well
-        BUILD_COUNT=$(gcloud builds list --filter "tags='$STORE_ID' AND substitutions.TRIGGER_NAME='$TRIGGER_NAME'" --region us-central1 --format="csv[no-heading](name)" | wc -l)
-
-        if [[ "$BUILD_COUNT" -gt "$MAX_RETRIES" ]]; then
-          echo "Current build count $BUILD_COUNT exceed max retries $MAX_RETRIES. Marking zone as failed"
+        # Instead of querying build history with gcloud (which is slow and was counting builds from previous lifecycles),
+        # we directly use the TRY_COUNT passed from Zone Watcher to check if we exceeded MAX_RETRIES.
+        if [[ "$TRY_COUNT" -gt "$MAX_RETRIES" ]]; then
+          echo "Current try count $TRY_COUNT has exhausted max retries $MAX_RETRIES. Marking zone as failed"
           zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
         else
-          echo "Current build count $BUILD_COUNT is <= max retries $MAX_RETRIES. Skipping for next retry"
+          echo "Current try count $TRY_COUNT is <= max retries $MAX_RETRIES. Skipping for next retry"
         fi
       fi
 
@@ -527,6 +526,8 @@ steps:
   - 'MAX_RETRIES=$_MAX_RETRIES'
   - 'TRIGGER_NAME=$TRIGGER_NAME'
   - 'OPT_IN_BUILD_MESSAGES=$_OPT_IN_BUILD_MESSAGES'
+  - 'TRY_COUNT=$_TRY_COUNT'
+  - 'INTENT_HASH=$_INTENT_HASH'
 
 options:
   logging: CLOUD_LOGGING_ONLY
