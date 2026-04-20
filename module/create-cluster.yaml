@@ -32,22 +32,22 @@ steps:
       set +x
       step="[Build: ${BUILD_ID}] $1"
       details=$2
-      echo "$step"
-      echo "$details"
-      echo "[Build: ${BUILD_ID}] Cluster Creation Failed: $CLUSTER_NAME"
+      echo ">>> [ERROR] $step"
+      echo ">>> [ERROR] Details: $details"
+      echo ">>> [ERROR] [Build: ${BUILD_ID}] Cluster Creation Failed: $CLUSTER_NAME"
 
       if [[ "$MAX_RETRIES" -eq 0 ]]; then
-        echo "Marking zone as failed"
+        echo ">>> [ERROR] Marking zone as failed"
         zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
       else
         # Will include the current build as well
         BUILD_COUNT=$(gcloud builds list --filter "tags='$STORE_ID' AND substitutions.TRIGGER_NAME='$TRIGGER_NAME'" --region us-central1 --format="csv[no-heading](name)" | wc -l)
 
         if [[ "$BUILD_COUNT" -gt "$MAX_RETRIES" ]]; then
-          echo "Current build count $BUILD_COUNT exceed max retries $MAX_RETRIES. Marking zone as failed"
+          echo ">>> [ERROR] Current build count $BUILD_COUNT exceeds max retries $MAX_RETRIES. Marking zone as failed"
           zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
         else
-          echo "Current build count $BUILD_COUNT is <= max retries $MAX_RETRIES. Skipping for next retry"
+          echo ">>> [ERROR] Current build count $BUILD_COUNT is <= max retries $MAX_RETRIES. Skipping for next retry"
         fi
       fi
 
@@ -56,7 +56,7 @@ steps:
 
     log_build_step() (
       set +x
-      message="[Build: ${BUILD_ID}] $1"
+      message=">>> [Build Step] [Build: ${BUILD_ID}] $*"
       echo "$message"
 
       zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_STARTED "$message"
@@ -69,7 +69,7 @@ steps:
       zone_store_path=$1
 
       [[ -n "${UNDER_FACTORY_CHECKS}" ]] && { return; } # UNDER_FACTORY_CHECKS already set
-      [[ -z "${zone_store_path}" ]] && { export UNDER_FACTORY_CHECKS=FALSE; echo "zone signaling disabled"; return ; }
+      [[ -z "${zone_store_path}" ]] && { export UNDER_FACTORY_CHECKS=FALSE; echo ">>> [Zone Status] zone signaling disabled"; return ; }
 
       ZONE_URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${zone_store_path}"
 
@@ -89,10 +89,10 @@ steps:
       if [[ "$out" == "READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS" || \
             "$out" == "CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED" || \
             "$out" == "CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED" ]]; then
-        echo "zone signaling enabled"
+        echo ">>> [Zone Status] zone signaling enabled"
         export UNDER_FACTORY_CHECKS=TRUE
       else
-        echo "zone signaling disabled"
+        echo ">>> [Zone Status] zone signaling disabled"
         export UNDER_FACTORY_CHECKS=FALSE
       fi
     }
@@ -103,7 +103,7 @@ steps:
       step=$3
       details=$4
 
-      [[ -z "${zone_store_path}" ]] && { echo "zone_store_path not provided"; return ; }
+      [[ -z "${zone_store_path}" ]] && { echo ">>> [Zone Signal] zone_store_path not provided"; return ; }
 
       if [[ "$UNDER_FACTORY_CHECKS" == "FALSE" ]]; then
         echo ">>> [Zone Signal] Aborted: UNDER_FACTORY_CHECKS is FALSE"
@@ -205,14 +205,14 @@ steps:
       if [[ "$current_version" =~ $regex ]]; then
           current_numeric="${BASH_REMATCH[1]}"
       else
-          echo "Error Could not extract numeric part from current version: '$current_version'. Should be in the format X.Y.X, like 1.8.0." >&2
+          echo ">>> [Version Eval] Error Could not extract numeric part from current version: '$current_version'. Should be in the format X.Y.X, like 1.8.0." >&2
           return 1
       fi
 
       if [[ "$required_version" =~ $regex ]]; then
           required_numeric="${BASH_REMATCH[1]}"
       else
-          echo "Error Could not extract numeric part from target version: '$required_version'. Should be in the format X.Y.X, like 1.8.0." >&2
+          echo ">>> [Version Eval] Error Could not extract numeric part from target version: '$required_version'. Should be in the format X.Y.X, like 1.8.0." >&2
           return 1 
       fi
 
@@ -241,12 +241,12 @@ steps:
     NODE_LOCATION=${ZONE}
     [[ -z "$NODE_LOCATION" ]] && die "ZONE not set"
 
-    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID)
-    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo
-    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv
+    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "Failed to retrieve git token from Secret Manager"
+    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "Failed to clone source of truth repository"
+    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "Failed to copy cluster intent file to working directory"
 
     export CLUSTER_INTENT_ROW=$(awk -F , "\$1 == \"$STORE_ID\" || \$1 == \"\\\"$STORE_ID\\\"\"" cluster-intent-registry.csv)
-    echo $CLUSTER_INTENT_ROW
+    echo ">>> [SoT Parse] $CLUSTER_INTENT_ROW"
     [[ -z "$CLUSTER_INTENT_ROW" ]] && die "Cluster intent not found for store $STORE_ID"
     export CLUSTER_INTENT_HEADER=$(head -1 cluster-intent-registry.csv)
     export CLUSTER_INTENT="$CLUSTER_INTENT_HEADER"$'\n'"$CLUSTER_INTENT_ROW"
@@ -283,12 +283,12 @@ steps:
     set +x
 
     if [ -n "${EDGE_CONTAINER_API_ENDPOINT_OVERRIDE:-}" ]; then
-      echo "Setting api_endpoint_overrides/edgecontainer to $EDGE_CONTAINER_API_ENDPOINT_OVERRIDE"
+      echo ">>> [Config] Setting api_endpoint_overrides/edgecontainer to $EDGE_CONTAINER_API_ENDPOINT_OVERRIDE"
       gcloud config set api_endpoint_overrides/edgecontainer $EDGE_CONTAINER_API_ENDPOINT_OVERRIDE
     fi
 
     if [ -n "${GKEHUB_API_ENDPOINT_OVERRIDE:-}" ]; then
-      echo "Setting api_endpoint_overrides/gkehub to $GKEHUB_API_ENDPOINT_OVERRIDE"
+      echo ">>> [Config] Setting api_endpoint_overrides/gkehub to $GKEHUB_API_ENDPOINT_OVERRIDE"
       gcloud config set api_endpoint_overrides/gkehub $GKEHUB_API_ENDPOINT_OVERRIDE
       GKEHUB_API_ENDPOINT="staging-gkehub.sandbox.googleapis.com"
     else
@@ -296,13 +296,13 @@ steps:
     fi
 
     if [ -n "${CONNECTGATEWAY_API_ENDPOINT_OVERRIDE:-}" ]; then
-      echo "Setting api_endpoint_overrides/connectgateway to $CONNECTGATEWAY_API_ENDPOINT_OVERRIDE"
+      echo ">>> [Config] Setting api_endpoint_overrides/connectgateway to $CONNECTGATEWAY_API_ENDPOINT_OVERRIDE"
       gcloud config set api_endpoint_overrides/connectgateway $CONNECTGATEWAY_API_ENDPOINT_OVERRIDE
     fi
 
 
     if [ -n "${EDGE_NETWORK_API_ENDPOINT_OVERRIDE:-}" ]; then
-      echo "Setting api_endpoint_overrides/edgenetwork to $EDGE_NETWORK_API_ENDPOINT_OVERRIDE"
+      echo ">>> [Config] Setting api_endpoint_overrides/edgenetwork to $EDGE_NETWORK_API_ENDPOINT_OVERRIDE"
       gcloud config set api_endpoint_overrides/edgenetwork $EDGE_NETWORK_API_ENDPOINT_OVERRIDE
     fi
 
@@ -359,7 +359,7 @@ steps:
       [[ -n "${IDENTITY_SERVICE_ARG}" ]] && CMD_ARGS+=("${IDENTITY_SERVICE_ARG}")
       [[ -n "${ROBIN_CNS_ARG}" ]] && CMD_ARGS+=("${ROBIN_CNS_ARG}")
 
-      echo "Executing command: $GCLOUD_CMD ${CMD_ARGS[*]}"
+      echo ">>> [Cluster Create] Executing command: $GCLOUD_CMD ${CMD_ARGS[*]}"
 
       out=$(
         $GCLOUD_CMD "${CMD_ARGS[@]}" 2>&1 | tee /dev/fd/5
@@ -374,9 +374,9 @@ steps:
     if [[ -z "${MAINTENANCE_WINDOW_START}" || -z ${MAINTENANCE_WINDOW_END} || \
             -z ${MAINTENANCE_WINDOW_RECURRENCE} ]]; then
       log_build_step "All maintenance window fields are not set, skipping"
-      echo "MAINTENANCE_WINDOW_START=${MAINTENANCE_WINDOW_START}"
-      echo "MAINTENANCE_WINDOW_END=${MAINTENANCE_WINDOW_END}"
-      echo "MAINTENANCE_WINDOW_RECURRENCE=${MAINTENANCE_WINDOW_RECURRENCE}"
+      echo ">>> [Cluster Create] MAINTENANCE_WINDOW_START=${MAINTENANCE_WINDOW_START}"
+      echo ">>> [Cluster Create] MAINTENANCE_WINDOW_END=${MAINTENANCE_WINDOW_END}"
+      echo ">>> [Cluster Create] MAINTENANCE_WINDOW_RECURRENCE=${MAINTENANCE_WINDOW_RECURRENCE}"
     else
       log_build_step "Setting maintenance window"
       out=$(gcloud edge-cloud container clusters update $CLUSTER_NAME \
@@ -412,7 +412,7 @@ steps:
             --project $MACHINE_PROJECT_ID)
         [[ $? -ne 0 ]] && die "Subnet creation failed" "$out"
       else
-        echo "VLAN $vlan already exists"
+        echo ">>> [Cluster Create] VLAN $vlan already exists"
       fi
     done
 
@@ -439,25 +439,27 @@ steps:
     log_build_step "Configuring configsync"
     gcloud secrets versions access latest --secret=$GIT_TOKEN_SECRETS_MANAGER_NAME \
         --project $SECRETS_PROJECT_ID >> "$(pwd)/git-creds"
-
     set -x
-    kubectl create ns config-management-system --dry-run=client -o yaml | kubectl apply -f -
-    # Capture PIPESTATUS to catch errors occurring in both components of the pipe
-    rcs=("${PIPESTATUS[@]}")
-    if [[ ${rcs[0]} -ne 0 ]] || [[ ${rcs[1]} -ne 0 ]]; then
-      die "Failed to create namespace config-management-system" "Exit codes: ${rcs[*]}"
-    fi
-    set +x
+    
+    set +e # Temporarily disable errexit to safely capture PIPESTATUS
+    trap - ERR # Prevent trap from hijacking pipe errors
 
+    kubectl create ns config-management-system --dry-run=client -o yaml | kubectl apply -f -
+    rcs=("${PIPESTATUS[@]}")
+    [[ ${rcs[0]} -ne 0 ]] && die "Failed to create namespace" "Command failed: kubectl create ns config-management-system --dry-run=client -o yaml (Exit code: ${rcs[0]})"
+    [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply namespace" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})"
+
+    set +x
     kubectl create secret generic git-creds --namespace="config-management-system" \
         --from-literal=username=default --from-file=token="$(pwd)/git-creds" \
         --dry-run=client -o yaml | kubectl apply -f -
     rcs=("${PIPESTATUS[@]}")
     set -x
-    # Capture PIPESTATUS to catch errors occurring in both components of the pipe
-    if [[ ${rcs[0]} -ne 0 ]] || [[ ${rcs[1]} -ne 0 ]]; then
-      die "Failed to create secret git-creds" "Exit codes: ${rcs[*]}"
-    fi
+    [[ ${rcs[0]} -ne 0 ]] && die "Failed to create secret" "Command failed: kubectl create secret generic git-creds ... (Exit code: ${rcs[0]})"
+    [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply secret" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})"
+
+    set -e # Restore errexit
+    trap 'die "Error configuring cluster" "Command that failed: $BASH_COMMAND"' ERR # Restore trap
 
     gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
         --config=./apply-spec.yaml --project $FLEET_PROJECT_ID
@@ -524,7 +526,7 @@ steps:
 
     log_build_step "Shutting down running VMs"
     for vm in $(kubectl get vmi -n vm-workloads --no-headers | awk '{print $1}'); do
-      echo "Shutting down $vm"
+      echo ">>> [Cluster Create] Shutting down $vm"
       ./virtctl stop -n vm-workloads $vm
     done
 
@@ -533,18 +535,18 @@ steps:
 
     if [ "${BART_CREATE_BUCKET}" = "TRUE" ]; then
       if [[ ! -z $(gcloud storage buckets describe gs://${CLUSTER_NAME}-bart-backup --project=${FLEET_PROJECT_ID}) ]]; then
-        echo "GCS bucket already exists"
+        echo ">>> [Cluster Create] GCS bucket already exists"
       else
         log_build_step "Creating and setting up new BART related GCS bucket"
         gcloud storage buckets create gs://${CLUSTER_NAME}-bart-backup --location=${LOCATION} --project=${FLEET_PROJECT_ID}
       fi
     else
-      echo "Backups for this cluster is not enabled. Not creating GCS bucket."
+      echo ">>> [Cluster Create] Backups for this cluster is not enabled."
     fi
 
     zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_PASSED
 
-    echo "Cluster Creation Succeeded: $CLUSTER_NAME"
+    echo ">>> [Cluster Create] Cluster Creation Succeeded: $CLUSTER_NAME"
 
   env:
   - 'BUILD_ID=$BUILD_ID'

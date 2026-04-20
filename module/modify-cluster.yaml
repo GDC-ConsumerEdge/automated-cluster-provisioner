@@ -23,7 +23,7 @@ steps:
     set -o pipefail
 
     function log() {
-      echo "[Build: ${BUILD_ID}] $1"
+      echo "[Build: ${BUILD_ID}] $*"
     }
 
     function die() {
