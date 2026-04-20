@@ -73,12 +73,16 @@ steps:
 
       ZONE_URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${zone_store_path}"
 
+      # Temporarily disable tracing to protect the access token from leaking in logs
+      set +x
       out=$(curl -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             -H "Content-Type: application/json" \
             -X GET \
             "${ZONE_URI}" -s | jq '.state' -r)
+      local curl_status=$?
+      set -x
 
-      if [[ $? -ne 0 ]]; then
+      if [[ $curl_status -ne 0 ]]; then
         die "Failed to signal the zone state"
       fi
 
@@ -102,10 +106,12 @@ steps:
       [[ -z "${zone_store_path}" ]] && { echo "zone_store_path not provided"; return ; }
 
       if [[ "$UNDER_FACTORY_CHECKS" == "FALSE" ]]; then
+        echo ">>> [Zone Signal] Aborted: UNDER_FACTORY_CHECKS is FALSE"
         return;
       fi
 
       if [[ "$OPT_IN_BUILD_MESSAGES" != "TRUE" ]]; then
+        echo ">>> [Zone Signal] Suppressing message details (OPT_IN_BUILD_MESSAGES != TRUE)"
         step=""
         details=""
       fi
@@ -120,6 +126,9 @@ steps:
         state_signal_payload="{\"state_signal\": \"${state_signal}\"}"
       fi
 
+      echo ">>> [Zone Signal] Sending '${state_signal}' to ${zone_store_path}..."
+      echo ">>> [Zone Signal] Payload: ${state_signal_payload}"
+
       out=$(curl -s -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             -H "Content-Type: application/json" \
             -X POST \
@@ -130,14 +139,22 @@ steps:
       if [[ $? -ne 0 ]]; then
         die "Failed to signal the zone state"
       fi
+      
+      echo ">>> [Zone Signal] Successfully signaled ${state_signal}."
 
       operation_id=$(echo $out | jq -r .name)
       URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${operation_id}"
+      echo ">>> [Zone Signal] Operation ID: ${operation_id}"
+      echo ">>> [Zone Signal] Waiting for operation to complete..."
+      
       signal_attempts=0
       max_retries_for_signal_completion=10
       while [[ ${signal_attempts} -lt ${max_retries_for_signal_completion} ]]; do
         is_completed=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             "${URI}" | jq -r .done)
+        
+        echo ">>> [Zone Signal] Poll attempt $((signal_attempts+1))/${max_retries_for_signal_completion} - done: ${is_completed}"
+        
         [[ "${is_completed}" != "false" ]] && break
         sleep 5
         ((signal_attempts++))
@@ -146,6 +163,7 @@ steps:
       if [[ ${signal_attempts} -ge ${max_retries_for_signal_completion} ]]; then
         die "Signal operation timed out"
       else
+        echo ">>> [Zone Signal] Operation completed successfully."
         return 0
       fi
     }
@@ -177,7 +195,8 @@ steps:
     # Use this function to determine if the required version is met. 
     # Return true if met. Return false if not met. 
     # This can be used when version checking is important.
-    function gdc_version_evaluate() {
+    function gdc_version_evaluate() (
+      set +x
       current_version="$1"
       required_version="$2"
 
@@ -198,20 +217,21 @@ steps:
       fi
 
       if [[ "$current_numeric" == "$required_numeric" ]]; then
-          return 0 # Versions are equal
+          echo ">>> [Version Eval] $current_version meets requirement $required_version (Equal)"
+          return 0
       fi
 
       first_sorted_version=$(printf "%s\n%s\n" "$current_numeric" "$required_numeric" | sort -V | head -n1)
 
 
       if [[ "$first_sorted_version" == "$required_numeric" ]]; then 
-          # current_version > required_version
-          return  0
+          echo ">>> [Version Eval] $current_version meets requirement $required_version (Newer)"
+          return 0
       else
-          # current_version < required_version
+          echo ">>> [Version Eval] $current_version fails requirement $required_version (Older)"
           return 1
       fi
-    }
+    )
 
     # Preemptively install required packages silently to maintain clean visual layouts
     apt-get update -qq && apt-get install -y -qq gettext-base csvtool jq > /dev/null
@@ -254,11 +274,13 @@ steps:
     export ZONE_NAME_FROM_SOT=$(parse_csv_optional "$CLUSTER_INTENT" "zone_name")
     export LABELS=$(parse_csv_optional "$CLUSTER_INTENT" "labels")
     export ZONE_ID="projects/${MACHINE_PROJECT_ID}/locations/${LOCATION}/zones/${STORE_ID}"
+    set -x
     if [[ -n "${ZONE_NAME_FROM_SOT}" ]]; then
       set_factory_check_flag
     else
       set_factory_check_flag $ZONE_ID
     fi
+    set +x
 
     if [ -n "${EDGE_CONTAINER_API_ENDPOINT_OVERRIDE:-}" ]; then
       echo "Setting api_endpoint_overrides/edgecontainer to $EDGE_CONTAINER_API_ENDPOINT_OVERRIDE"
