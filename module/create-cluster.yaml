@@ -475,7 +475,17 @@ steps:
     if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] &&  ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
       log_build_step "Configuring manual Group RBAC"
       FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)')
-      kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}'
+
+      count=0
+      max_retries=10
+      while [[ ${count} -lt ${max_retries} ]]; do
+        kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}' && break
+        echo "Failed to patch clientconfig, retrying in 10s..."
+        sleep 10
+        ((count++))
+      done
+      [[ ${count} -ge ${max_retries} ]] && die "Failed to patch clientconfig after ${max_retries} attempts"
+
       log_build_step "Group RBAC applied"
     else
       log_build_step "Skipping manual Group RBAC setup"
