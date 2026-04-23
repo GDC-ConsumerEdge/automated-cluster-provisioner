@@ -81,7 +81,7 @@ resource "google_logging_metric" "cluster-creation-failure" {
   name   = "cluster-creation-failure-${var.environment}"
   description = "Cluster Creation Failure Count"
   filter = <<EOT
-(resource.type="build" textPayload=~"Cluster Creation Failed")
+(resource.type="build" textPayload=~"Cluster Creation Failed" AND NOT textPayload=~"\[CUSTOMER_ERROR\]")
 EOT
   metric_descriptor {
     metric_kind = "DELTA"
@@ -123,7 +123,7 @@ resource "google_logging_metric" "cluster-modify-failure" {
   name   = "cluster-modify-failure-${var.environment}"
   description = "Cluster Modify Failure Count"
   filter = <<EOT
-(resource.type="build" textPayload=~"Cluster Modify Failed")
+(resource.type="build" textPayload=~"Cluster Modify Failed" AND NOT textPayload=~"\[CUSTOMER_ERROR\]")
 EOT
   metric_descriptor {
     metric_kind = "DELTA"
@@ -137,5 +137,110 @@ EOT
 
   label_extractors = {
     "cluster_name" = "REGEXP_EXTRACT(textPayload, \": (.*)\")"
+  }
+}
+
+resource "google_logging_metric" "cluster-creation-failure-csv" {
+  name   = "cluster-creation-failure-csv-${var.environment}"
+  description = "Cluster Creation Failure Count due to CSV intent issues"
+  filter = <<EOT
+(resource.type="build" textPayload=~"Cluster Creation Failed.*\[CUSTOMER_ERROR\] (Missing required parameter|Empty required parameter|Cluster intent not found|STORE_ID not set|ZONE not set)")
+EOT
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    labels {
+      key         = "cluster_name"
+      value_type  = "STRING"
+      description = "cluster name"
+    }
+  }
+
+  label_extractors = {
+    "cluster_name" = "REGEXP_EXTRACT(textPayload, \"Failed for (.*?):\")"
+  }
+}
+
+resource "google_logging_metric" "cluster-creation-failure-healthcheck" {
+  name   = "cluster-creation-failure-healthcheck-${var.environment}"
+  description = "Cluster Creation Failure Count due to workload health check timeouts"
+  filter = <<EOT
+(resource.type="build" textPayload=~"Cluster Creation Failed.*\[CUSTOMER_ERROR\] Workloads are not healthy")
+EOT
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    labels {
+      key         = "cluster_name"
+      value_type  = "STRING"
+      description = "cluster name"
+    }
+  }
+
+  label_extractors = {
+    "cluster_name" = "REGEXP_EXTRACT(textPayload, \"Failed for (.*?):\")"
+  }
+}
+
+resource "google_logging_metric" "cluster-creation-failure-source-access" {
+  name   = "cluster-creation-failure-source-access-${var.environment}"
+  description = "Cluster Creation Failure Count due to Git or Secret access issues"
+  filter = <<EOT
+(resource.type="build" textPayload=~"Cluster Creation Failed.*\[CUSTOMER_ERROR\] (Failed to retrieve git token|Failed to clone source of truth|Failed to copy cluster intent)")
+EOT
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    labels {
+      key         = "cluster_name"
+      value_type  = "STRING"
+      description = "cluster name"
+    }
+  }
+
+  label_extractors = {
+    "cluster_name" = "REGEXP_EXTRACT(textPayload, \"Failed for (.*?):\")"
+  }
+}
+
+resource "google_logging_metric" "cluster-creation-failure-robin" {
+  name   = "cluster-creation-failure-robin-${var.environment}"
+  description = "Cluster Creation Failure Count due to invalid Robin CNS configuration"
+  filter = <<EOT
+(resource.type="build" textPayload=~"Cluster Creation Failed.*\[CUSTOMER_ERROR\] Invalid Robin CNS request")
+EOT
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    labels {
+      key         = "cluster_name"
+      value_type  = "STRING"
+      description = "cluster name"
+    }
+  }
+
+  label_extractors = {
+    "cluster_name" = "REGEXP_EXTRACT(textPayload, \"Failed for (.*?):\")"
+  }
+}
+
+resource "google_logging_metric" "cluster-modify-failure-csv" {
+  name   = "cluster-modify-failure-csv-${var.environment}"
+  description = "Cluster Modify Failure Count due to CSV intent issues"
+  filter = <<EOT
+(resource.type="build" textPayload=~"Cluster Modify Failed.*\[CUSTOMER_ERROR\] (Missing required parameter|Empty required parameter|Cluster intent not found|Missing maintenance exclusion window property)")
+EOT
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    labels {
+      key         = "cluster_name"
+      value_type  = "STRING"
+      description = "cluster name"
+    }
+  }
+
+  label_extractors = {
+    "cluster_name" = "REGEXP_EXTRACT(textPayload, \"Failed for (.*?):\")"
   }
 }

@@ -27,8 +27,7 @@ steps:
     }
 
     function die() {
-      log "$1"
-      log "Cluster Modify Failed: $CLUSTER_NAME"
+      log "Cluster Modify Failed for $CLUSTER_NAME: $1"
       exit 1
     }
 
@@ -38,10 +37,10 @@ steps:
 
       output=$(echo "$input" | csvtool namedcol "$column" - | csvtool drop 1 - | tr -d '"')
 
-      [[ $? -ne 0 ]] && die "Missing required parameter $2"
+      [[ $? -ne 0 ]] && die "[CUSTOMER_ERROR] Missing required parameter: $column"
 
       if [ -z "$output" ]; then
-        die "Empty required parameter $2"
+        die "[CUSTOMER_ERROR] Empty required parameter: $column"
       fi
 
       echo "$output"
@@ -73,7 +72,7 @@ steps:
 
     export CLUSTER_INTENT_ROW=$(awk -F , "\$1 == \"$STORE_ID\" || \$1 == \"\\\"$STORE_ID\\\"\"" cluster-intent-registry.csv)
     echo $CLUSTER_INTENT_ROW
-    [[ -z "${CLUSTER_INTENT_ROW}" ]] && die "Cluster intent not found for store ${STORE_ID}"
+    [[ -z "${CLUSTER_INTENT_ROW}" ]] && die "[CUSTOMER_ERROR] Cluster intent not found for store: ${STORE_ID}"
 
     export CLUSTER_INTENT_HEADER=$(head -1 cluster-intent-registry.csv)
     export CLUSTER_INTENT="$CLUSTER_INTENT_HEADER"$'\n'"$CLUSTER_INTENT_ROW"
@@ -94,7 +93,7 @@ steps:
     export MAINTENANCE_EXCLUSION_ENDS=$(echo "$CLUSTER_INTENT" | head -n1 | tr , '\n' |  tr -d '"' | sort -n | grep 'maintenance_exclusion_end.*')
 
     if [ "${#MAINTENANCE_EXCLUSION_NAMES[@]}" -ne "${#MAINTENANCE_EXCLUSION_STARTS[@]}" ] || [ "${#MAINTENANCE_EXCLUSION_NAMES[@]}" -ne "${#MAINTENANCE_EXCLUSION_ENDS[@]}" ]; then
-      die "Missing maintenance exclusion window property"
+      die "[CUSTOMER_ERROR] Missing maintenance exclusion window property"
     fi
 
     if [ -n "${EDGE_CONTAINER_API_ENDPOINT_OVERRIDE:-}" ]; then
