@@ -34,7 +34,7 @@ steps:
       details=$2
       echo ">>> [ERROR] $step"
       echo ">>> [ERROR] Details: $details"
-      echo ">>> [ERROR] [Build: ${BUILD_ID}] Cluster Creation Failed: $CLUSTER_NAME"
+      echo ">>> [ERROR] [Build: ${BUILD_ID}] Cluster Creation Failed for $CLUSTER_NAME: $1"
 
       if [[ "$MAX_RETRIES" -eq 0 ]]; then
         echo ">>> [ERROR] Marking zone as failed"
@@ -174,10 +174,10 @@ steps:
 
       output=$(echo "$input" | csvtool namedcol "$column" - | csvtool drop 1 - | tr -d '"')
 
-      [[ $? -ne 0 ]] && die "Missing required parameter $2"
+      [[ $? -ne 0 ]] && die "[CUSTOMER_ERROR] Missing required parameter: $column"
 
       if [ -z "$output" ]; then
-        die "Empty required parameter $2"
+        die "[CUSTOMER_ERROR] Empty required parameter: $column"
       fi
 
       echo "$output"
@@ -236,18 +236,18 @@ steps:
     # Preemptively install required packages silently to maintain clean visual layouts
     apt-get update -qq && apt-get install -y -qq gettext-base csvtool jq > /dev/null
 
-    [[ -z "${STORE_ID}" ]] && die "STORE_ID not set"
+    [[ -z "${STORE_ID}" ]] && die "[CUSTOMER_ERROR] STORE_ID not set. Please ensure store_id is provided in the trigger."
 
     NODE_LOCATION=${ZONE}
-    [[ -z "$NODE_LOCATION" ]] && die "ZONE not set"
+    [[ -z "$NODE_LOCATION" ]] && die "[CUSTOMER_ERROR] ZONE not set. Please ensure zone is provided in the trigger."
 
-    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "Failed to retrieve git token from Secret Manager"
-    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "Failed to clone source of truth repository"
-    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "Failed to copy cluster intent file to working directory"
+    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "[CUSTOMER_ERROR] Failed to retrieve git token from Secret Manager. Please check secret name and permissions."
+    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "[CUSTOMER_ERROR] Failed to clone source of truth repository. Please check repo URL and branch."
+    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "[CUSTOMER_ERROR] Failed to copy cluster intent file. Please check if SOURCE_OF_TRUTH_PATH is correct."
 
     export CLUSTER_INTENT_ROW=$(awk -F , "\$1 == \"$STORE_ID\" || \$1 == \"\\\"$STORE_ID\\\"\"" cluster-intent-registry.csv)
     echo ">>> [SoT Parse] $CLUSTER_INTENT_ROW"
-    [[ -z "$CLUSTER_INTENT_ROW" ]] && die "Cluster intent not found for store $STORE_ID"
+    [[ -z "$CLUSTER_INTENT_ROW" ]] && die "[CUSTOMER_ERROR] Cluster intent not found for store: $STORE_ID"
     export CLUSTER_INTENT_HEADER=$(head -1 cluster-intent-registry.csv)
     export CLUSTER_INTENT="$CLUSTER_INTENT_HEADER"$'\n'"$CLUSTER_INTENT_ROW"
 
@@ -338,7 +338,7 @@ steps:
           # Update command to use alpha until this flag is GA'ed
           GCLOUD_CMD="gcloud alpha"
         else
-          die "Robin CNS is only supported for GDC versions 1.12.0 or higher. Current version: ${CLUSTER_VERSION}"
+          die "[CUSTOMER_ERROR] Invalid Robin CNS request: Robin CNS requires version 1.12.0+ but got ${CLUSTER_VERSION}"
         fi
       fi
 
@@ -510,7 +510,7 @@ steps:
       log_build_step "Waiting for workload healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy --timeout="${WORKLOAD_TIMEOUT}s"; then
         kubectl describe healthchecks.validator.gdc.gke.io/default
-        die "Workloads are not healthy after ${WORKLOAD_TIMEOUT}s. Please review the failed workload health checks."
+        die "[CUSTOMER_ERROR] Workloads are not healthy after ${WORKLOAD_TIMEOUT}s. Please review the failed workload health checks."
       fi
     fi
     
