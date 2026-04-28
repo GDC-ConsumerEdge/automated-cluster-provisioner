@@ -113,6 +113,33 @@ resource "google_monitoring_alert_policy" "watcher-absence-alert" {
   }
 }
 
+resource "google_monitoring_alert_policy" "network-heartbeat-failure-alert" {
+  display_name = "ACP Network Heartbeat Failure - ${var.environment}"
+  combiner     = "OR"
+  notification_channels = [google_monitoring_notification_channel.cp_notification_channel.name]
+  conditions {
+    display_name = "Network unreachable for project"
+    condition_threshold {
+      filter          = "metric.type=\"custom.googleapis.com/acp_network_heartbeat\" AND resource.type=\"global\""
+      duration        = "1500s" # 25 minutes
+      comparison      = "COMPARISON_LT"
+      threshold_value = 1
+      
+      aggregations {
+        alignment_period   = "600s" # 10 minutes (matches scheduler)
+        per_series_aligner = "ALIGN_MEAN"
+        cross_series_reducer = "REDUCE_NONE"
+        group_by_fields    = ["metric.label.target_project_id", "metric.label.target_type"]
+      }
+    }
+  }
+
+  documentation {
+    content   = "The ACP network heartbeat has failed to reach target project $${metric.label.target_project_id}. Please check network connectivity and permissions."
+    mime_type = "text/markdown"
+  }
+}
+
 
 
 resource "time_sleep" "cluster-creation-failure-healthcheck-timer" {

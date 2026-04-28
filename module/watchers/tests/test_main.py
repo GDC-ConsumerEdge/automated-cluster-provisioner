@@ -138,6 +138,36 @@ project1,1.12.0
 
     @mock.patch('src.main.get_git_token_from_secrets_manager')
     @mock.patch('src.main.ClusterIntentReader')
+    def test_read_intent_data_no_fleet_config(self, mock_reader_cls, mock_get_token):
+        """Test that when fleet_config_path is None, fleet version validation is skipped but parsing continues."""
+        mock_get_token.return_value = "mock-token"
+        mock_reader_instance = mock.MagicMock()
+        mock_reader_cls.return_value = mock_reader_instance
+        
+        main_csv = """store_id,fleet_project_id,machine_project_id,location,cluster_name,node_count,cluster_ipv4_cidr,services_ipv4_cidr,external_load_balancer_ipv4_address_pools,sync_repo,sync_branch,sync_dir,secrets_project_id,git_token_secrets_manager_name,cluster_version
+store1,project1,machine1,us-central1,cluster1,3,10.0.0.0/16,10.1.0.0/16,1.1.1.1-1.1.1.10,repo1,main,.,sec-proj,git-sec,"1.13.0"
+"""
+        mock_reader_instance.retrieve_source_of_truth.return_value = main_csv
+        
+        params = mock.MagicMock()
+        params.source_of_truth_repo = "repo"
+        params.source_of_truth_branch = "main"
+        params.source_of_truth_path = "intent.csv"
+        params.fleet_config_path = None
+        params.secrets_project_id = "sec-proj"
+        params.git_secret_id = "git-sec"
+        
+        result = main.read_intent_data(params, 'fleet_project_id')
+        
+        self.assertIn(('project1', 'us-central1'), result)
+        self.assertIn('store1', result[('project1', 'us-central1')])
+        edge_zone = result[('project1', 'us-central1')]['store1']
+        self.assertEqual(edge_zone.cluster_version, "1.13.0")
+        # Assert ClusterIntentReader was only instantiated once (for the main CSV)
+        mock_reader_cls.assert_called_once_with("repo", "main", "intent.csv", "mock-token")
+
+    @mock.patch('src.main.get_git_token_from_secrets_manager')
+    @mock.patch('src.main.ClusterIntentReader')
     def test_read_intent_data_robin_cns_invalid_version(self, mock_reader_cls, mock_get_token):
         """Test that Robin CNS validation fails if version is below 1.12.0."""
         mock_get_token.return_value = "mock-token"
@@ -163,3 +193,117 @@ project1,1.11.0
         result = main.read_intent_data(params, 'fleet_project_id')
         
         self.assertEqual(result.get(('project1', 'us-central1')), {})
+
+
+class TestZoneActiveMetric(unittest.TestCase):
+
+    @mock.patch('src.main.clients.get_monitoring_client')
+    @mock.patch('src.main.get_zones')
+    @mock.patch('src.main.ClusterIntentReader')
+    @mock.patch('src.main.get_git_token_from_secrets_manager')
+    @mock.patch('src.main.WatcherSettings')
+    def test_zone_active_metric_api_failure(
+        self,
+        mock_watcher_settings,
+        mock_get_git_token,
+        mock_intent_reader_class,
+        mock_get_zones,
+        mock_get_monitoring_client,
+    ):
+        from google.api_core import exceptions
+        
+        # Arrange
+        params = mock.MagicMock()
+        params.project_id = "test-project"
+        params.secrets_project_id = "test-secrets-project"
+        params.git_secret_id = "test-git-secret"
+        mock_watcher_settings.return_value = params
+
+        mock_get_git_token.return_value = "test-token"
+
+        mock_intent_reader = mock.MagicMock()
+        mock_intent_reader_class.return_value = mock_intent_reader
+        mock_intent_reader.retrieve_source_of_truth.return_value = (
+            "fleet_project_id,location,store_id,cluster_name,machine_project_id\n"
+            "test-fleet-project,test-location,store1,cluster1,test-machine-project\n"
+        )
+
+        mock_get_zones.side_effect = exceptions.ServerError("API down")
+
+        mock_m_client = mock.MagicMock()
+        mock_get_monitoring_client.return_value = mock_m_client
+
+        # Act
+        req = mock.MagicMock()
+        main.zone_active_metric(req)
+
+        # Assert
+        mock_m_client.create_time_series.assert_called_once()
+        args, kwargs = mock_m_client.create_time_series.call_args
+        request = args[0]
+        
+        self.assertEqual(request.time_series[0].points[0].value.int64_value, 1)
+
+
+class TestNetworkConnectionHeartbeat(unittest.TestCase):
+
+    @mock.patch('src.main.clients.get_monitoring_client')
+    @mock.patch('src.main.clients.get_edgenetwork_client')
+    @mock.patch('src.main.clients.get_edgecontainer_client')
+    @mock.patch('src.main.clients.get_hardware_management_client')
+    @mock.patch('src.main.ClusterIntentReader')
+    @mock.patch('src.main.get_git_token_from_secrets_manager')
+    @mock.patch('src.main.WatcherSettings')
+    def test_network_connection_heartbeat_success(
+        self,
+        mock_watcher_settings,
+        mock_get_git_token,
+        mock_intent_reader_class,
+        mock_get_hwm_client,
+        mock_get_ec_client,
+        mock_get_en_client,
+        mock_get_monitoring_client,
+    ):
+        from google.api_core import exceptions
+        
+        # Arrange
+        params = mock.MagicMock()
+        params.project_id = "test-project"
+        params.secrets_project_id = "test-secrets-project"
+        params.git_secret_id = "test-git-secret"
+        mock_watcher_settings.return_value = params
+
+        mock_get_git_token.return_value = "test-token"
+
+        mock_intent_reader = mock.MagicMock()
+        mock_intent_reader_class.return_value = mock_intent_reader
+        mock_intent_reader.retrieve_source_of_truth.return_value = (
+            "fleet_project_id,location,store_id,cluster_name,machine_project_id\n"
+            "test-fleet-project,test-location,store1,cluster1,test-machine-project\n"
+        )
+
+        mock_hwm_client = mock.MagicMock()
+        mock_get_hwm_client.return_value = mock_hwm_client
+        
+        mock_ec_client = mock.MagicMock()
+        mock_get_ec_client.return_value = mock_ec_client
+        
+        mock_en_client = mock.MagicMock()
+        mock_get_en_client.return_value = mock_en_client
+
+        mock_m_client = mock.MagicMock()
+        mock_get_monitoring_client.return_value = mock_m_client
+
+        # Act
+        req = mock.MagicMock()
+        main.network_connection_heartbeat(req)
+
+        # Assert
+        mock_m_client.create_time_series.assert_called_once()
+        args, kwargs = mock_m_client.create_time_series.call_args
+        request = args[0]
+        
+        self.assertEqual(len(request.time_series), 2)
+        for ts in request.time_series:
+            self.assertEqual(ts.points[0].value.int64_value, 1)
+

@@ -202,6 +202,9 @@ def _zone_watcher_worker(
 @functions_framework.http
 def zone_watcher(req: flask.Request):
     params = WatcherSettings()
+    
+    if not params.cloud_build_trigger_name:
+        raise ValueError("CB_TRIGGER_NAME environment variable is required for zone_watcher")
 
     logger.info(f'Running zone watcher for: proj_id={params.project_id},sot={params.source_of_truth_repo}/{params.source_of_truth_branch}/{params.source_of_truth_path}, cb_trigger={params.cloud_build_trigger}')
     
@@ -414,6 +417,9 @@ def _cluster_watcher_worker(
 @functions_framework.http
 def cluster_watcher(req: flask.Request):
     params = WatcherSettings()
+    
+    if not params.cloud_build_trigger_name:
+        raise ValueError("CB_TRIGGER_NAME environment variable is required for cluster_watcher")
 
     logger.info(f'proj_id = {params.project_id}')
     logger.info(f'cb_trigger = {params.cloud_build_trigger}')
@@ -460,22 +466,24 @@ def zone_active_metric(req: flask.Request):
         b_generate_metric = False
         b_zone_found = False
         active_metric = 0  # 0 - inactive, 1 - active
-        if (m_proj_id, loc) not in zones_project_locations_checked:
-            zones.update(get_zones(m_proj_id, loc))
-            zones_project_locations_checked.add((m_proj_id, loc))   
-
         try:
+            if (m_proj_id, loc) not in zones_project_locations_checked:
+                zones.update(get_zones(m_proj_id, loc))
+                zones_project_locations_checked.add((m_proj_id, loc))   
+
             zone = zones[store_id]
             logger.debug(f'{store_id} state = {Zone.State(zone.state).name}')
             b_zone_found = True
         except Exception as e:
             logger.debug(f'get_zone({store_id}) -> {type(e)}', exc_info=False)
             if isinstance(e, exceptions.ServerError):
+                logger.error(f"API Failure calling get_zones for project {m_proj_id}: {e}")
                 # if ServerError (API failure), treat zone as active and not to filter any alerts
                 # any exception other than hw mgmt API failure, such as ClientError or generic exception
                 # treat as non-existing zone (don't generate metric)
                 b_generate_metric = True
                 active_metric = 1
+                gdce_zone_name = store_id  # Fallback to avoid UnboundLocalError if API fails
 
         if b_zone_found and zone.globally_unique_id is not None and len(zone.globally_unique_id.strip()) > 0:
             # only zones with globally_unique_id is considering as existing zones(generate metric)
@@ -531,6 +539,106 @@ def zone_active_metric(req: flask.Request):
     logger.debug(f'total zone active flag updated = {len(time_series_data)}')
     return f'total zone active flag updated = {len(time_series_data)}'
 
+@functions_framework.http
+def network_connection_heartbeat(req: flask.Request):
+    params = WatcherSettings()
+    logger.info(f'Running Network Connection Heartbeat in: proj_id={params.project_id}')
+
+    def create_time_series_point(project_id, target_project_id, location, target_type, status):
+        timestamp = Timestamp()
+        timestamp.GetCurrentTime()
+        
+        data_point = {
+            'interval': {'end_time': timestamp},
+            'value': {'int64_value': status}
+        }
+        
+        return {
+            'metric': {
+                'type': 'custom.googleapis.com/acp_network_heartbeat',
+                'labels': {
+                    'target_project_id': target_project_id,
+                    'location': location,
+                    'target_type': target_type
+                }
+            },
+            'resource': {
+                'type': 'global',
+                'labels': {
+                    'project_id': project_id
+                }
+            },
+            'points': [data_point]
+        }
+
+    token = get_git_token_from_secrets_manager(params.secrets_project_id, params.git_secret_id)
+    intent_reader = ClusterIntentReader(
+        params.source_of_truth_repo, params.source_of_truth_branch,
+        params.source_of_truth_path, token)
+    zone_config_fio = intent_reader.retrieve_source_of_truth()
+    rdr = csv.DictReader(io.StringIO(zone_config_fio))
+
+    time_series_data = []
+    machine_projects_checked = set()
+    fleet_projects_checked = set()
+
+    for row in rdr:
+        f_proj_id = row['fleet_project_id']
+        m_proj_id = f_proj_id if row['machine_project_id'] is None or len(row['machine_project_id']) == 0 else row['machine_project_id']
+        loc = params.region if row['location'] is None or len(row['location']) == 0 else row['location']
+        
+        # 1. Check Machine Project (HWM API)
+        if (m_proj_id, loc) not in machine_projects_checked:
+            machine_projects_checked.add((m_proj_id, loc))
+            status = 0
+            try:
+                hwm_client = clients.get_hardware_management_client()
+                hwm_client.list_zones(request={"parent": f"projects/{m_proj_id}/locations/{loc}"})
+                status = 1
+            except Exception as e:
+                logger.error(f"Network check failed for Machine Project {m_proj_id}/{loc}: {e}")
+            
+            time_series_data.append(create_time_series_point(
+                project_id=params.project_id,
+                target_project_id=m_proj_id,
+                location=loc,
+                target_type="machine_project",
+                status=status
+            ))
+
+        # 2. Check Fleet Project (Edge Container API)
+        if (f_proj_id, loc) not in fleet_projects_checked:
+            fleet_projects_checked.add((f_proj_id, loc))
+            status = 0
+            try:
+                ec_client = clients.get_edgecontainer_client()
+                ec_client.list_clusters(request={"parent": f"projects/{f_proj_id}/locations/{loc}"})
+                status = 1
+            except Exception as e:
+                logger.error(f"Network check failed for Fleet Project {f_proj_id}/{loc}: {e}")
+            
+            time_series_data.append(create_time_series_point(
+                project_id=params.project_id,
+                target_project_id=f_proj_id,
+                location=loc,
+                target_type="fleet_project",
+                status=status
+            ))
+
+    # Send to Cloud Monitoring
+    m_client = clients.get_monitoring_client()
+    batch_size = 200
+    for i in range(0, len(time_series_data), batch_size):
+        request = monitoring_v3.CreateTimeSeriesRequest({
+            'name': f'projects/{params.project_id}',
+            'time_series': time_series_data[i:i + batch_size]
+        })
+        m_client.create_time_series(request)
+
+    logger.info(f'Total network heartbeat points updated = {len(time_series_data)}')
+    return f'Total network heartbeat points updated = {len(time_series_data)}'
+
+
 def read_intent_data(params, named_key) -> Dict[Tuple, Dict[str, SourceOfTruthModel]]:
     """Returns a data structure containing project, location, and store information  
 
@@ -557,14 +665,17 @@ def read_intent_data(params, named_key) -> Dict[Tuple, Dict[str, SourceOfTruthMo
     rdr = csv.DictReader(io.StringIO(zone_config_fio))  # will raise exception if csv parsing fails
     
     # Read fleet config for fleet-level version verification
-    fleet_reader = ClusterIntentReader(params.source_of_truth_repo, params.source_of_truth_branch, params.fleet_config_path, token)
     fleet_versions = {}
-    try:
-        fleet_config_fio = fleet_reader.retrieve_source_of_truth()
-        fleet_rdr = csv.DictReader(io.StringIO(fleet_config_fio))
-    except Exception as e:
-        logger.warning(f"Failed to read fleet config file at {params.fleet_config_path}: {e}. Fleet-level version validation will be skipped.")
-        fleet_rdr = []
+    fleet_rdr = []
+    if params.fleet_config_path:
+        fleet_reader = ClusterIntentReader(params.source_of_truth_repo, params.source_of_truth_branch, params.fleet_config_path, token)
+        try:
+            fleet_config_fio = fleet_reader.retrieve_source_of_truth()
+            fleet_rdr = csv.DictReader(io.StringIO(fleet_config_fio))
+        except Exception as e:
+            logger.warning(f"Failed to read fleet config file at {params.fleet_config_path}: {e}. Fleet-level version validation will be skipped.")
+    else:
+        logger.info("Fleet config path not provided. Fleet-level version validation will be skipped.")
 
     for f_row in fleet_rdr:
         try:

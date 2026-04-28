@@ -10,8 +10,8 @@ class WatcherSettings(BaseSettings):
     source_of_truth_repo: str = Field(..., alias="SOURCE_OF_TRUTH_REPO")
     source_of_truth_branch: str = Field(..., alias="SOURCE_OF_TRUTH_BRANCH")
     source_of_truth_path: str = Field(..., alias="SOURCE_OF_TRUTH_PATH")
-    fleet_config_path: str = Field(..., alias="FLEET_CONFIG_PATH")
-    cloud_build_trigger_name: str = Field(..., alias="CB_TRIGGER_NAME")
+    fleet_config_path: Optional[str] = Field(default=None, alias="FLEET_CONFIG_PATH")
+    cloud_build_trigger_name: Optional[str] = Field(default=None, alias="CB_TRIGGER_NAME")
     max_retries: int = Field(default=0, ge=0, le=5, alias="MAX_RETRIES")
     max_workers: int = Field(default=1, ge=1, le=100, alias="MAX_WORKERS")
 
