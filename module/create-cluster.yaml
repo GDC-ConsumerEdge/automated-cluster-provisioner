@@ -454,15 +454,15 @@ steps:
       [[ ${count} -ge ${max_retries_for_healthcheck_creation} ]] && die "Health check resource not created after 20min"
 
       log_build_step "Waiting for platform healthchecks to pass"
-      if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy --timeout=1h; then
+      if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy --timeout="${PLATFORM_HEALTH_TIMEOUT_SEC}s"; then
         kubectl describe healthchecks.validator.gdc.gke.io/default
-        die "Platform is not healthy after 1h. Please review the failed platform health checks."
+        die "Platform is not healthy after ${PLATFORM_HEALTH_TIMEOUT_SEC}s. Please review the failed platform health checks."
       fi
 
-      # Calculate workload timeout by removing non-workload related buffer time from the over build timeout.
-      # ($TIMEOUT_IN_SECONDS) - (1h for platform health) - (1h for cluster health)
+      # Calculate workload timeout by removing non-workload related buffer time from the overall build timeout.
+      # ($TIMEOUT_IN_SECONDS) - (platform health timeout) - (1h for cluster health)
       #                       - (10m for extra buffer) - (30m for vm wait)
-      WORKLOAD_TIMEOUT="$(($TIMEOUT_IN_SECONDS-"9600"))"
+      WORKLOAD_TIMEOUT="$(($TIMEOUT_IN_SECONDS - $PLATFORM_HEALTH_TIMEOUT_SEC - 3600 - 600 - 1800))"
 
       log_build_step "Waiting for workload healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy --timeout="${WORKLOAD_TIMEOUT}s"; then
@@ -520,6 +520,7 @@ steps:
   - 'SKIP_HEALTH_CHECK=$_SKIP_HEALTH_CHECK'
   - 'SKIP_IDENTITY_SERVICE=$_SKIP_IDENTITY_SERVICE'
   - 'TIMEOUT_IN_SECONDS=$_TIMEOUT_IN_SECONDS'
+  - 'PLATFORM_HEALTH_TIMEOUT_SEC=$_PLATFORM_HEALTH_TIMEOUT_SEC'
   - 'STORE_ID=$_STORE_ID'
   - 'ZONE=$_ZONE'
   - 'CS_VERSION=$_CS_VERSION'

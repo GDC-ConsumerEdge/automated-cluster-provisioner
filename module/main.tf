@@ -28,6 +28,7 @@ locals {
     { _GIT_SECRET_ID = var.git_secret_id },
     { _GIT_SECRETS_PROJECT_ID = local.project_id_secrets },
     { _TIMEOUT_IN_SECONDS = var.cluster_creation_timeout },
+    { _PLATFORM_HEALTH_TIMEOUT_SEC = var.cluster_platform_health_timeout_sec },
     { _CS_VERSION = var.default_config_sync_version },
     { _MAX_RETRIES = var.cluster_creation_max_retries },
     var.skip_identity_service == true ? { _SKIP_IDENTITY_SERVICE = "TRUE" } : {_SKIP_IDENTITY_SERVICE = "FALSE"},

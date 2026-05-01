@@ -163,6 +163,12 @@ variable "cluster_creation_max_retries" {
   type        = number
 }
 
+variable "cluster_platform_health_timeout_sec" {
+  description = "Timeout in seconds for platform health checks during cluster creation."
+  default     = "3600"
+  type        = number
+}
+
 # https://cloud.google.com/kubernetes-engine/enterprise/config-sync/docs/release-notes
 variable "default_config_sync_version" {
   description = "Sets a default ConfigSync version to use for provisioned clusters. If left empty, it will not specify a version at the cluster level. If empty, this will either install the fleet configured version or the latest version of ConfigSync."
