@@ -1,7 +1,7 @@
 module "cluster_automation" {
-  source                       = "git::https://github.com/weiwang118/automated-cluster-provisioner.git//module?ref=sandbox-test"
+  source                       = "git::https://github.com/GDC-ConsumerEdge/automated-cluster-provisioner.git//module?ref=acp-test-prep"
   project_id                   = "cloud-alchemists-sandbox"
-  source_of_truth_repo         = "github.com/weiwang118/automated-cluster-provisioner"
+  source_of_truth_repo         = "github.com/GDC-ConsumerEdge/automated-cluster-provisioner"
   git_secret_id                = "wei-acp-test"
   project_id_secrets           = "cloud-alchemists-sandbox"
   edge_container_api_endpoint_override      = "https://staging-edgecontainer.sandbox.googleapis.com/"
@@ -9,13 +9,13 @@ module "cluster_automation" {
   edge_network_api_endpoint_override          = "https://staging-edgenetwork.sandbox.googleapis.com/"
   hardware_management_api_endpoint_override = "https://staging-gdchardwaremanagement.sandbox.googleapis.com/"
   connect_gateway_api_endpoint_override = "https://staging-connectgateway.sandbox.googleapis.com/"
-  source_of_truth_path         = "wei-source-of-truth.csv"
-  source_of_truth_branch       = "sandbox-test"
+  source_of_truth_path         = "weiranf-source-of-truth.csv"
+  source_of_truth_branch       = "acp-test-prep"
   region                       = "us-central1"
   environment                  = "acp-dev"
   cluster_creation_timeout     = "86400"
   cluster_creation_max_retries = "0"
-  notification_channel_email   = "weiww@google.com"
+  notification_channel_email   = "weiranf@google.com"
   opt_in_build_messages        = true
   default_config_sync_version  = "1.18.3"
 }
