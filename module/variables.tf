@@ -153,7 +153,7 @@ variable "hardware_management_api_endpoint_override" {
 
 variable "cluster_creation_timeout" {
   description = "Cloud Build timeout in seconds for cluster creation. This should account for time to create the cluster, configure core services (ConfigSync, Robin, VMRuntime, etc..), and time for any workload configuration needed before the healthchecks pass."
-  default     = "28800"
+  default     = "32400"
   type        = number
 }
 
