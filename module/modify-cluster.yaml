@@ -27,8 +27,7 @@ steps:
     }
 
     function die() {
-      log "$1"
-      log "Cluster Modify Failed: $CLUSTER_NAME"
+      log "Cluster Modify Failed for $CLUSTER_NAME: $1"
       exit 1
     }
 
@@ -38,10 +37,10 @@ steps:
 
       output=$(echo "$input" | csvtool namedcol "$column" - | csvtool drop 1 - | tr -d '"')
 
-      [[ $? -ne 0 ]] && die "Missing required parameter $2"
+      [[ $? -ne 0 ]] && die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] missing column header: $column"
 
       if [ -z "$output" ]; then
-        die "Empty required parameter $2"
+        die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] empty cell value: $column"
       fi
 
       echo "$output"
@@ -59,21 +58,20 @@ steps:
     # Preemptively install required packages silently to maintain clean visual layouts
     apt-get update -qq && apt-get install -y -qq gettext-base csvtool jq > /dev/null
 
-    [[ -z "${STORE_ID}" ]] && die "STORE_ID not set"
+    [[ -z "${STORE_ID}" ]] && die "[CONFIG_VALIDATION_FAILED] STORE_ID not set. Please ensure store_id is provided in the trigger."
 
     NODE_LOCATION=${ZONE}
-    [[ -z "$NODE_LOCATION" ]] && die "ZONE not set"
+    [[ -z "$NODE_LOCATION" ]] && die "[CONFIG_VALIDATION_FAILED] ZONE not set. Please ensure zone is provided in the trigger."
 
-    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID \
-        --project $GIT_SECRETS_PROJECT_ID)
+    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to retrieve git token from Secret Manager. Please check secret name and permissions."
 
-    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo
+    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to clone source of truth repository. Please check repo URL and branch."
 
-    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv
+    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to copy cluster intent file. Please check if SOURCE_OF_TRUTH_PATH is correct."
 
     export CLUSTER_INTENT_ROW=$(awk -F , "\$1 == \"$STORE_ID\" || \$1 == \"\\\"$STORE_ID\\\"\"" cluster-intent-registry.csv)
     echo $CLUSTER_INTENT_ROW
-    [[ -z "${CLUSTER_INTENT_ROW}" ]] && die "Cluster intent not found for store ${STORE_ID}"
+    [[ -z "${CLUSTER_INTENT_ROW}" ]] && die "[CONFIG_VALIDATION_FAILED] Cluster intent not found for store: ${STORE_ID}"
 
     export CLUSTER_INTENT_HEADER=$(head -1 cluster-intent-registry.csv)
     export CLUSTER_INTENT="$CLUSTER_INTENT_HEADER"$'\n'"$CLUSTER_INTENT_ROW"
@@ -94,7 +92,7 @@ steps:
     export MAINTENANCE_EXCLUSION_ENDS=$(echo "$CLUSTER_INTENT" | head -n1 | tr , '\n' |  tr -d '"' | sort -n | grep 'maintenance_exclusion_end.*')
 
     if [ "${#MAINTENANCE_EXCLUSION_NAMES[@]}" -ne "${#MAINTENANCE_EXCLUSION_STARTS[@]}" ] || [ "${#MAINTENANCE_EXCLUSION_NAMES[@]}" -ne "${#MAINTENANCE_EXCLUSION_ENDS[@]}" ]; then
-      die "Missing maintenance exclusion window property"
+      die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Missing maintenance exclusion window property"
     fi
 
     if [ -n "${EDGE_CONTAINER_API_ENDPOINT_OVERRIDE:-}" ]; then

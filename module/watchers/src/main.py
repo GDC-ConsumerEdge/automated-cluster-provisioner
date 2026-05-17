@@ -589,7 +589,7 @@ def read_intent_data(params, named_key) -> Dict[Tuple, Dict[str, SourceOfTruthMo
             if not edge_zone.cluster_version:
                 fleet_version = fleet_versions.get(edge_zone.fleet_project_id)
                 if not fleet_version:
-                    logger.error(f"Store {edge_zone.store_id}: Cluster version missing in cluster intent and no fleet default found for project {edge_zone.fleet_project_id}")
+                    logger.error(f"[CONFIG_VALIDATION_FAILED][cluster:{edge_zone.cluster_name}] Cluster version missing in cluster intent and no fleet default found for project {edge_zone.fleet_project_id}")
                     continue
                 else:
                     logger.info(f"Store {edge_zone.store_id}: Using fleet default version {fleet_version} for project {edge_zone.fleet_project_id}")
@@ -607,13 +607,14 @@ def read_intent_data(params, named_key) -> Dict[Tuple, Dict[str, SourceOfTruthMo
                     major = int(version_parts[0])
                     minor = int(version_parts[1])
                     if major < 1 or (major == 1 and minor < 12):
-                        logger.error(f"Store {edge_zone.store_id}: Robin CNS is only supported for GDC versions 1.12.0 or higher. Got {version_to_check}")
+                        logger.error(f"[INVALID_ROBIN_REQUEST][cluster:{edge_zone.cluster_name}] Robin CNS is only supported for GDC versions 1.12.0 or higher. Got {version_to_check}")
                         continue
                 except (IndexError, ValueError):
-                    logger.error(f"Store {edge_zone.store_id}: Invalid cluster version format: {version_to_check}")
+                    logger.error(f"[INVALID_ROBIN_REQUEST][cluster:{edge_zone.cluster_name}] Invalid cluster version format: {version_to_check}")
                     continue
         except ValidationError as e:
-            logger.error(f"Invalid row detected in source of truth: {e.errors()}")
+            cluster_name = row.get('cluster_name', 'unknown')
+            logger.error(f"[CONFIG_VALIDATION_FAILED][cluster:{cluster_name}] Invalid row detected in source of truth: {e.errors()}")
             continue
 
         config_zone_info[proj_loc_key][row['store_id']] = edge_zone

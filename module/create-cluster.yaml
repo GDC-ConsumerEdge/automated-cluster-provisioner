@@ -34,17 +34,17 @@ steps:
       details=$2
       echo ">>> [ERROR] $step"
       echo ">>> [ERROR] Details: $details"
-      echo ">>> [ERROR] [Build: ${BUILD_ID}] Cluster Creation Failed: $CLUSTER_NAME"
+      echo ">>> [ERROR] [Build: ${BUILD_ID}] Cluster Creation Failed for $CLUSTER_NAME: $1"
 
       if [[ "$MAX_RETRIES" -eq 0 ]]; then
         echo ">>> [ERROR] Marking zone as failed"
-        zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
+        zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
       else
         # Instead of querying build history with gcloud (which is slow and was counting builds from previous lifecycles),
         # we directly use the TRY_COUNT passed from Zone Watcher to check if we exceeded MAX_RETRIES.
         if [[ "$TRY_COUNT" -gt "$MAX_RETRIES" ]]; then
           echo ">>> [ERROR] Current try count $TRY_COUNT has exhausted max retries $MAX_RETRIES. Marking zone as failed"
-          zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
+          zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
         else
           echo ">>> [ERROR] Current try count $TRY_COUNT is <= max retries $MAX_RETRIES. Skipping failure signal to allow next retry."
         fi
@@ -58,7 +58,7 @@ steps:
       message=">>> [Build Step] [Build: ${BUILD_ID}] $*"
       echo "$message"
 
-      zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_STARTED "$message"
+      zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_STARTED "$message"
     )
 
     # Sets the `UNDER_FACTORY_CHECKS` to either true if ZoneState is ready, started, or failed
@@ -176,10 +176,10 @@ steps:
 
       output=$(echo "$input" | csvtool namedcol "$column" - | csvtool drop 1 - | tr -d '"')
 
-      [[ $? -ne 0 ]] && die "Missing required parameter $2" >&2
+      [[ $? -ne 0 ]] && die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] missing column header: $column" >&2
 
       if [ -z "$output" ]; then
-        die "Empty required parameter $2" >&2
+        die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] empty cell value: $column" >&2
       fi
 
       echo "$output"
@@ -214,12 +214,12 @@ steps:
       local fleet_config_path="repo/$FLEET_CONFIG_PATH"
       
       if [[ ! -f "$fleet_config_path" ]]; then
-         die "[CUSTOMER_ERROR] Fleet config file not found at $fleet_config_path but required for fallback" >&2
+         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Fleet config file not found at $fleet_config_path but required for fallback" >&2
       fi
       local row=$(awk -F , "\$1 == \"$project_id\" || \$1 == \"\\\"$project_id\\\"\"" "$fleet_config_path")
       
       if [[ -z "$row" ]]; then
-         die "[CUSTOMER_ERROR] Project $project_id not found in $fleet_config_path" >&2
+         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Project $project_id not found in $fleet_config_path" >&2
       fi
       
       local header=$(head -1 "$fleet_config_path")
@@ -290,18 +290,18 @@ steps:
     # Preemptively install required packages silently to maintain clean visual layouts
     apt-get update -qq && apt-get install -y -qq gettext-base csvtool jq > /dev/null
 
-    [[ -z "${STORE_ID}" ]] && die "STORE_ID not set"
+    [[ -z "${STORE_ID}" ]] && die "[CONFIG_VALIDATION_FAILED] STORE_ID not set. Please ensure store_id is provided in the trigger."
 
     NODE_LOCATION=${ZONE}
-    [[ -z "$NODE_LOCATION" ]] && die "ZONE not set"
+    [[ -z "$NODE_LOCATION" ]] && die "[CONFIG_VALIDATION_FAILED] ZONE not set. Please ensure zone is provided in the trigger."
 
-    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "Failed to retrieve git token from Secret Manager"
-    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "Failed to clone source of truth repository"
-    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "Failed to copy cluster intent file to working directory"
+    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to retrieve git token from Secret Manager. Please check secret name and permissions."
+    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to clone source of truth repository. Please check repo URL and branch."
+    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to copy cluster intent file. Please check if SOURCE_OF_TRUTH_PATH is correct."
 
     export CLUSTER_INTENT_ROW=$(awk -F , "\$1 == \"$STORE_ID\" || \$1 == \"\\\"$STORE_ID\\\"\"" cluster-intent-registry.csv)
     echo ">>> [SoT Parse] $CLUSTER_INTENT_ROW"
-    [[ -z "$CLUSTER_INTENT_ROW" ]] && die "Cluster intent not found for store $STORE_ID"
+    [[ -z "$CLUSTER_INTENT_ROW" ]] && die "[CONFIG_VALIDATION_FAILED] Cluster intent not found for store: $STORE_ID"
     export CLUSTER_INTENT_HEADER=$(head -1 cluster-intent-registry.csv)
     export CLUSTER_INTENT="$CLUSTER_INTENT_HEADER"$'\n'"$CLUSTER_INTENT_ROW"
 
@@ -334,7 +334,7 @@ steps:
     if [[ -n "${ZONE_NAME_FROM_SOT}" ]]; then
       set_factory_check_flag
     else
-      set_factory_check_flag $ZONE_ID
+      set_factory_check_flag "$ZONE_ID"
     fi
     set +x
 
@@ -394,7 +394,7 @@ steps:
           # Update command to use alpha until this flag is GA'ed
           GCLOUD_CMD="gcloud alpha"
         else
-          die "Robin CNS is only supported for GDC versions 1.12.0 or higher. Current version: ${CLUSTER_VERSION}"
+          die "[INVALID_ROBIN_REQUEST][cluster:${CLUSTER_NAME:-unknown}] Invalid Robin CNS request: Robin CNS requires version 1.12.0+ but got ${CLUSTER_VERSION}"
         fi
       fi
 
@@ -566,7 +566,7 @@ steps:
       log_build_step "Waiting for workload healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy --timeout="${WORKLOAD_TIMEOUT}s"; then
         kubectl describe healthchecks.validator.gdc.gke.io/default
-        die "Workloads are not healthy after ${WORKLOAD_TIMEOUT}s. Please review the failed workload health checks."
+        die "[CUSTOMER_ERROR] Workloads are not healthy after ${WORKLOAD_TIMEOUT}s. Please review the failed workload health checks."
       fi
     fi
     
@@ -600,7 +600,7 @@ steps:
       echo ">>> [Cluster Create] Backups for this cluster is not enabled."
     fi
 
-    zone_signal $ZONE_ID FACTORY_TURNUP_CHECKS_PASSED
+    zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_PASSED
 
     echo ">>> [Cluster Create] Cluster Creation Succeeded: $CLUSTER_NAME"
 

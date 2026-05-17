@@ -191,24 +191,35 @@ Create a file named `fleet-version-config.csv` (or custom name specified by `fle
 
 This table describes the metrics available to monitor cluster provisioning.
 
-| Name                                    | Type  | Tags         | Description                                                                     |
-| --------------------------------------- | ----- | ------------ | ------------------------------------------------------------------------------- |
-| unknown-zones-${environment}            | Count | zone         | Zones found in the environment, but are not specified as part of cluster intent |
-| ready-stores-${environment}             | Count | store_id     | Store edge zones ready for provisioning                                         |
-| cluster-creation-success-${environment} | Count | cluster_name | Cluster Creation Success Count                                                  |
-| cluster-creation-failure-${environment} | Count | cluster_name | Cluster Creation Failure Count                                                  |
-| cluster-modify-success-${environment}   | Count | cluster_name | Cluster Modify Success Count                                                    |
-| cluster-modify-failure-${environment}   | Count | cluster_name | Cluster Modify Failure Count                                                    |
+| Name                                                  | Type  | Tags         | Description                                                                     |
+| ----------------------------------------------------- | ----- | ------------ | ------------------------------------------------------------------------------- |
+| unknown-zones-${environment}                          | Count | zone         | Zones found in the environment, but are not specified as part of cluster intent |
+| ready-stores-${environment}                           | Count | store_id     | Store edge zones ready for provisioning                                         |
+| cluster-creation-success-${environment}               | Count | cluster_name | Cluster Creation Success Count                                                  |
+| cluster-creation-failure-${environment}               | Count | cluster_name | Cluster Creation Failure Count                                                  |
+| cluster-modify-success-${environment}                 | Count | cluster_name | Cluster Modify Success Count                                                    |
+| cluster-modify-failure-${environment}                 | Count | cluster_name | Cluster Modify Failure Count                                                    |
+| config-validation-failed-${environment}               | Count | cluster_name | Configuration validation failed in Zone Watcher or Cloud Build                  |
+| cluster-creation-failure-healthcheck-${environment}   | Count | cluster_name | Cluster Creation Failure Count due to workload health check timeouts            |
+| cluster-creation-failure-source-access-${environment}  | Count | store_id | Cluster Creation Failure Count due to Git or Secret access issues               |
+| cluster-creation-failure-robin-${environment}         | Count | cluster_name | Cluster Creation Failure Count due to invalid Robin CNS configuration           |
+| cluster-modify-failure-source-access-${environment}   | Count | store_id | Cluster Modify Failure Count due to Git or Secret access issues                 |
 
 ### Alerts
 
 This table describes the alerts created to monitoring cluster provisioning. These alerts are intended to be examples and should be tuned for your environment.
 
-| Name                     | Description                                                                                                          |
-|--------------------------|----------------------------------------------------------------------------------------------------------------------|
-| unknown-zone-alert       | Alerts whenever an unknown zone not defined in the cluster intent source of truth has been found in the environment. |
-| cluster-creation-failure | Alerts when cluster creation has failed                                                                              |
-| cluster-modify-failure   | Alerts when cluster modification has failed                                                                          |
+| Name                                         | Description                                                                                                          |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| unknown-zone-alert                           | Alerts whenever an unknown zone not defined in the cluster intent source of truth has been found in the environment. |
+| watcher-absence-alert                        | Alerts when Zone Watcher or Cluster Watcher has not received execution requests for 30 minutes                       |
+| cluster-creation-failure                     | Alerts when cluster creation has failed                                                                              |
+| cluster-modify-failure                       | Alerts when cluster modification has failed                                                                          |
+| config-validation-failed-alert               | Alerts when configuration validation fails in Zone Watcher or Cloud Build                                            |
+| cluster-creation-failure-healthcheck-alert   | Alerts when workloads do not become healthy within the timeout period                                                |
+| cluster-creation-failure-source-access-alert | Alerts when the system could not access the source of truth repository or retrieve secrets                           |
+| cluster-creation-failure-robin-alert         | Alerts when Robin CNS was requested on an unsupported version                                                        |
+| cluster-modify-failure-source-access-alert   | Alerts when the system could not access source of truth during modification                                          |
 
 ### Automated Retries
 
