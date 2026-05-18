@@ -32,27 +32,6 @@ steps:
     fi
     HARDWARE_MANAGEMENT_API_VERSION="v1alpha"
 
-    function infer_grpc_code() {
-      local message="$1"
-      local code=2 # Default: UNKNOWN
-      
-      if [[ "$message" =~ "Missing" || "$message" =~ "Empty" || "$message" =~ "not set" ]]; then
-        code=3  # INVALID_ARGUMENT
-      elif [[ "$message" =~ "timeout" || "$message" =~ "timed out" || "$message" =~ "after 1h" || "$message" =~ "after 20min" ]]; then
-        code=4  # DEADLINE_EXCEEDED
-      elif [[ "$message" =~ "not found" ]]; then
-        code=5  # NOT_FOUND
-      elif [[ "$message" =~ "Secret Manager" || "$message" =~ "clone" ]]; then
-        code=7  # PERMISSION_DENIED
-      elif [[ "$message" =~ "only supported for" ]]; then
-        code=9  # FAILED_PRECONDITION
-      elif [[ "$message" =~ "signal the zone state" ]]; then
-        code=14 # UNAVAILABLE
-      fi
-      
-      echo "$code"
-    }
-
     function die() {
       if [[ "${INSIDE_DIE:-}" == "TRUE" ]]; then
         echo ">>> [CRITICAL] Recursive call to die detected. Exiting immediately."
@@ -60,14 +39,14 @@ steps:
       fi
       export INSIDE_DIE=TRUE
       set +x
+
       step="[Build: ${BUILD_ID}] $1"
       details=$2
       # Clean up logs by removing progress dots and ANSI color codes
       details=$(echo "$details" | sed -e 's/\.\{5,\}//g' -e 's/\x1b\[[0-9;]*[a-zA-Z]//g')
-      diag_output=$3
       
-      # Infer gRPC error code based on message
-      local code=$(infer_grpc_code "$1")
+      local code=${3:-2}
+      diag_output=$4
       
       # Capture last 30 lines of log for context
       local log_tail=$(tail -n 30 "$LOG_FILE" 2>/dev/null)
@@ -122,7 +101,7 @@ steps:
       set -x
 
       if [[ $curl_status -ne 0 ]]; then
-        die "Failed to signal the zone state" "$out"
+        die "Failed to signal the zone state" "$out" 14
       fi
 
       if [[ "$out" == "READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS" || \
@@ -279,7 +258,7 @@ steps:
           echo ">>> [Zone Signal] [CRITICAL] Failed to send signal ${state_signal} to API while inside die." >&2
           exit 1
         else
-          die "Failed to signal the zone state" "$out"
+          die "Failed to signal the zone state" "$out" 14
         fi
       fi
       
@@ -308,7 +287,7 @@ steps:
           echo ">>> [Zone Signal] [CRITICAL] Signal operation timed out waiting for completion while inside die." >&2
           exit 1
         else
-          die "Signal operation timed out" "Operation $operation_id did not complete after $((max_retries_for_signal_completion * 5)) seconds."
+          die "Signal operation timed out" "Operation $operation_id did not complete after $((max_retries_for_signal_completion * 5)) seconds." 4
         fi
       else
         echo ">>> [Zone Signal] Operation completed successfully."
@@ -322,10 +301,10 @@ steps:
 
       output=$(echo "$input" | csvtool namedcol "$column" - | csvtool drop 1 - | tr -d '"')
 
-      [[ $? -ne 0 ]] && die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] missing column header: $column" "Input data:\n$input" >&2
+      [[ $? -ne 0 ]] && die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] missing column header: $column" "Input data:\n$input" 3 >&2
 
       if [ -z "$output" ]; then
-        die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] empty cell value: $column" "Input data:\n$input" >&2
+        die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] empty cell value: $column" "Input data:\n$input" 3 >&2
       fi
 
       echo "$output"
@@ -360,12 +339,12 @@ steps:
       local fleet_config_path="repo/$FLEET_CONFIG_PATH"
       
       if [[ ! -f "$fleet_config_path" ]]; then
-         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Fleet config file not found at $fleet_config_path but required for fallback" "Please check if the git repository contains the file at path: $FLEET_CONFIG_PATH" >&2
+         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Fleet config file not found at $fleet_config_path but required for fallback" "Please check if the git repository contains the file at path: $FLEET_CONFIG_PATH" 5 >&2
       fi
       local row=$(awk -F , "\$1 == \"$project_id\" || \$1 == \"\\\"$project_id\\\"\"" "$fleet_config_path")
       
       if [[ -z "$row" ]]; then
-         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Project $project_id not found in $fleet_config_path" "File contents of $fleet_config_path:\n$(cat "$fleet_config_path" 2>/dev/null)" >&2
+         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Project $project_id not found in $fleet_config_path" "File contents of $fleet_config_path:\n$(cat "$fleet_config_path" 2>/dev/null)" 5 >&2
       fi
       
       local header=$(head -1 "$fleet_config_path")
@@ -436,18 +415,18 @@ steps:
     # Preemptively install required packages silently to maintain clean visual layouts
     apt-get update -qq && apt-get install -y -qq gettext-base csvtool jq > /dev/null
 
-    [[ -z "${STORE_ID}" ]] && die "[CONFIG_VALIDATION_FAILED] STORE_ID not set. Please ensure store_id is provided in the trigger."
+    [[ -z "${STORE_ID}" ]] && die "[CONFIG_VALIDATION_FAILED] STORE_ID not set. Please ensure store_id is provided in the trigger." "" 3
 
     NODE_LOCATION=${ZONE}
-    [[ -z "$NODE_LOCATION" ]] && die "[CONFIG_VALIDATION_FAILED] ZONE not set. Please ensure zone is provided in the trigger."
+    [[ -z "$NODE_LOCATION" ]] && die "[CONFIG_VALIDATION_FAILED] ZONE not set. Please ensure zone is provided in the trigger." "" 3
 
-    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to retrieve git token from Secret Manager" "Secret name: $GIT_SECRET_ID, Project ID: $GIT_SECRETS_PROJECT_ID"
-    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to clone source of truth repository" "Repo: $SOURCE_OF_TRUTH_REPO, Branch: $SOURCE_OF_TRUTH_BRANCH"
-    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to copy cluster intent file" "Source of truth path: $SOURCE_OF_TRUTH_PATH"
+    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to retrieve git token from Secret Manager" "Secret name: $GIT_SECRET_ID, Project ID: $GIT_SECRETS_PROJECT_ID" 7
+    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to clone source of truth repository" "Repo: $SOURCE_OF_TRUTH_REPO, Branch: $SOURCE_OF_TRUTH_BRANCH" 7
+    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to copy cluster intent file" "Source of truth path: $SOURCE_OF_TRUTH_PATH" 5
 
     export CLUSTER_INTENT_ROW=$(awk -F , "\$1 == \"$STORE_ID\" || \$1 == \"\\\"$STORE_ID\\\"\"" cluster-intent-registry.csv)
     echo ">>> [SoT Parse] $CLUSTER_INTENT_ROW"
-    [[ -z "$CLUSTER_INTENT_ROW" ]] && die "[CONFIG_VALIDATION_FAILED] Cluster intent not found for store: $STORE_ID" "Store ID: $STORE_ID, Intent CSV file contents:\n$(cat cluster-intent-registry.csv 2>/dev/null)"
+    [[ -z "$CLUSTER_INTENT_ROW" ]] && die "[CONFIG_VALIDATION_FAILED] Cluster intent not found for store: $STORE_ID" "Store ID: $STORE_ID, Intent CSV file contents:\n$(cat cluster-intent-registry.csv 2>/dev/null)" 5
     export CLUSTER_INTENT_HEADER=$(head -1 cluster-intent-registry.csv)
     export CLUSTER_INTENT="$CLUSTER_INTENT_HEADER"$'\n'"$CLUSTER_INTENT_ROW"
 
@@ -540,7 +519,7 @@ steps:
           # Update command to use alpha until this flag is GA'ed
           GCLOUD_CMD="gcloud alpha"
         else
-          die "[INVALID_ROBIN_REQUEST][cluster:${CLUSTER_NAME:-unknown}] Invalid Robin CNS request: Robin CNS requires version 1.12.0+ but got ${CLUSTER_VERSION}"
+          die "[INVALID_ROBIN_REQUEST][cluster:${CLUSTER_NAME:-unknown}] Invalid Robin CNS request" "Robin CNS requires version 1.12.0+ but got ${CLUSTER_VERSION}" 9
         fi
       fi
 
@@ -603,7 +582,7 @@ steps:
           --zone $NODE_LOCATION --project $MACHINE_PROJECT_ID \
           --filter="VLANID=$vlan" --format="json" 2>&1)
 
-      [[ $? -ne 0 ]] && die "Unable to query for subnets" "$EXISTING_VLAN"
+      [[ $? -ne 0 ]] && die "Unable to query for subnets" "$EXISTING_VLAN" 7
 
       if [ "$EXISTING_VLAN" = "[]" ]; then
         out=$(gcloud edge-cloud networking subnets create "network-$vlan" \
@@ -628,7 +607,7 @@ steps:
     fi
 
     export KUBECONFIG="$(pwd)/gateway-kubeconfig"
-    out=$(gcloud container fleet memberships get-credentials $CLUSTER_NAME --project $FLEET_PROJECT_ID 2>&1) || die "Failed to get cluster credentials" "$out"
+    out=$(gcloud container fleet memberships get-credentials $CLUSTER_NAME --project $FLEET_PROJECT_ID 2>&1) || die "Failed to get cluster credentials" "$out" 7
 
     out=$(gcloud storage cp gs://$CLUSTER_INTENT_BUCKET/apply-spec.yaml.template . 2>&1) || die "Failed to copy apply-spec template from GCS" "$out"
 
@@ -650,8 +629,8 @@ steps:
     rcs=("${PIPESTATUS[@]}")
     if [[ ${rcs[0]} -ne 0 || ${rcs[1]} -ne 0 ]]; then
       diag=$(kubectl cluster-info 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Cluster unreachable")
-      [[ ${rcs[0]} -ne 0 ]] && die "Failed to create namespace" "Command failed: kubectl create ns config-management-system --dry-run=client -o yaml (Exit code: ${rcs[0]})" "$diag"
-      [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply namespace" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})" "$diag"
+      [[ ${rcs[0]} -ne 0 ]] && die "Failed to create namespace" "Command failed: kubectl create ns config-management-system --dry-run=client -o yaml (Exit code: ${rcs[0]})" 2 "$diag"
+      [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply namespace" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})" 2 "$diag"
     fi
 
     set +x
@@ -662,8 +641,8 @@ steps:
     set -x
     if [[ ${rcs[0]} -ne 0 || ${rcs[1]} -ne 0 ]]; then
       diag=$(kubectl cluster-info 2>/dev/null || echo "Cluster unreachable")
-      [[ ${rcs[0]} -ne 0 ]] && die "Failed to create secret" "Command failed: kubectl create secret generic git-creds ... (Exit code: ${rcs[0]})" "$diag"
-      [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply secret" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})" "$diag"
+      [[ ${rcs[0]} -ne 0 ]] && die "Failed to create secret" "Command failed: kubectl create secret generic git-creds ... (Exit code: ${rcs[0]})" 2 "$diag"
+      [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply secret" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})" 2 "$diag"
     fi
 
     out=$(gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
@@ -672,7 +651,7 @@ steps:
     set -e
     if [[ $rc -ne 0 ]]; then
       diag=$(kubectl get rootsync -n config-management-system -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get RootSync status")
-      die "Config Sync apply failed" "$out" "$diag"
+      die "Config Sync apply failed" "$out" 2 "$diag"
     fi
 
     out=$(gcloud storage cp gs://$CLUSTER_INTENT_BUCKET/fleet-packages-rbac.yaml.template . 2>&1) || die "Failed to copy fleet packages RBAC template" "$out"
@@ -682,7 +661,7 @@ steps:
 
     out=$(kubectl apply -f fleet-packages-rbac.yaml 2>&1) || {
       diag=$(kubectl cluster-info 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Cluster unreachable")
-      die "Failed to apply fleet packages RBAC" "$out" "$diag"
+      die "Failed to apply fleet packages RBAC" "$out" 2 "$diag"
     }
 
     # Apply old Group RBAC steps if cluster version is less than 1.10.0
@@ -692,7 +671,7 @@ steps:
       kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}' || {
         rc=$?
         diag=$(kubectl get clientconfig default -n kube-public -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get clientconfig status")
-        die "Failed to patch clientconfig for Group RBAC" "Exit code: $rc" "$diag"
+        die "Failed to patch clientconfig for Group RBAC" "Exit code: $rc" 2 "$diag"
       }
       log_build_step "Group RBAC applied"
     else
@@ -713,13 +692,13 @@ steps:
       done
       if [[ ${count} -ge ${max_retries_for_healthcheck_creation} ]]; then
         diag=$(kubectl get crd healthchecks.validator.gdc.gke.io -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] CRD not found")
-        die "Health check resource not created after 20min" "Timeout waiting for resource creation" "$diag"
+        die "Health check resource not created after 20min" "Timeout waiting for resource creation" 4 "$diag"
       fi
 
       log_build_step "Waiting for platform healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy --timeout=1h; then
         diag=$(kubectl get healthchecks.validator.gdc.gke.io/default -o yaml 2>/dev/null || echo "Failed to get healthcheck status")
-        die "Platform is not healthy after 1h" "Timeout waiting for condition=PlatformHealthy" "$diag"
+        die "Platform is not healthy after 1h" "Timeout waiting for condition=PlatformHealthy" 4 "$diag"
       fi
 
       # Calculate workload timeout by removing non-workload related buffer time from the over build timeout.
@@ -730,7 +709,7 @@ steps:
       log_build_step "Waiting for workload healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy --timeout="${WORKLOAD_TIMEOUT}s"; then
         diag=$(kubectl get healthchecks.validator.gdc.gke.io/default -o yaml 2>/dev/null || echo "Failed to get healthcheck status")
-        die "[CUSTOMER_ERROR] Workloads are not healthy after ${WORKLOAD_TIMEOUT}s" "Timeout waiting for condition=WorkloadsHealthy" "$diag"
+        die "[CUSTOMER_ERROR] Workloads are not healthy after ${WORKLOAD_TIMEOUT}s" "Timeout waiting for condition=WorkloadsHealthy" 4 "$diag"
       fi
     fi
     
@@ -753,7 +732,7 @@ steps:
     done
     if [[ $fail -ne 0 ]]; then
       diag=$(kubectl get vmi -n vm-workloads -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get VMI status")
-      die "Unsuccessful VM termination sequence" "Failed to stop all VMs" "$diag"
+      die "Unsuccessful VM termination sequence" "Failed to stop all VMs" 2 "$diag"
     fi
 
     set +eE
