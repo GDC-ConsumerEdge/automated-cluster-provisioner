@@ -80,6 +80,49 @@ steps:
       zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_STARTED "$message"
     )
 
+    # Retrieves a compact, single-line diagnostic summary of cluster nodes and optional namespace.
+    # It makes exactly 1 kubectl API request for nodes to prevent overloading the API Server.
+    #
+    # Ideal Output Examples (Healthy):
+    #   - With namespace parameter:
+    #     "Cluster: Connected | Nodes: 3/3 Ready | Namespace: config-management-system (Active)"
+    #   - Without namespace parameter:
+    #     "Cluster: Connected | Nodes: 3/3 Ready"
+    #
+    # Unhealthy Output Example (e.g. Node 3 is NotReady):
+    #     "Cluster: Connected | Nodes: 2/3 Ready (Unhealthy: gmec-bjc9003.ba.l.google.com) | Namespace: config-management-system (Active)"
+    #
+    # Unreachable Output Example:
+    #     "Cluster Status: Unreachable"
+    function get_cluster_diag_info() {
+      local target_ns=$1
+      local ns_status_str=""
+      
+      local node_info
+      if ! node_info=$(kubectl get nodes --no-headers 2>/dev/null); then
+        echo "Cluster Status: Unreachable"
+        return
+      fi
+
+      local total_nodes=$(echo "$node_info" | wc -l || echo "0")
+      local ready_nodes=$(echo "$node_info" | grep -c ' Ready' || echo "0")
+      
+      local unhealthy_list=""
+      if [[ $ready_nodes -lt $total_nodes ]]; then
+        local names=$(echo "$node_info" | grep -v ' Ready' | awk '{print $1}' | tr '\n' ',' | sed 's/,$//')
+        unhealthy_list=" (Unhealthy: $names)"
+      fi
+
+      # Attach target namespace status if provided
+      if [[ -n "$target_ns" ]]; then
+        local ns_status=$(kubectl get ns "$target_ns" --no-headers 2>/dev/null | awk '{print $2}')
+        [[ -z "$ns_status" ]] && ns_status="NOT_FOUND"
+        ns_status_str=" | Namespace: $target_ns ($ns_status)"
+      fi
+
+      echo "Cluster: Connected | Nodes: $ready_nodes/$total_nodes Ready$unhealthy_list$ns_status_str"
+    }
+
     # Sets the `UNDER_FACTORY_CHECKS` to either true if ZoneState is ready, started, or failed
     # or false for all other ZoneStates or for provisioning that bypasses the ZoneState.
     function set_factory_check_flag() {
@@ -143,7 +186,8 @@ steps:
 
       # Unified, elegant single jq call to build different payloads conditionally.
       # This is robust against null/empty/special characters and guarantees valid JSON.
-      local state_signal_payload=$(jq -n \
+      local state_signal_payload
+      state_signal_payload=$(jq -n \
         --arg signal "$state_signal" \
         --arg step "$step" \
         --arg build_id "${BUILD_ID:-}" \
@@ -445,8 +489,11 @@ steps:
     assign_required SYNC_DIR "sync_dir"
     assign_required SECRETS_PROJECT_ID "secrets_project_id"
     assign_required GIT_TOKEN_SECRETS_MANAGER_NAME "git_token_secrets_manager_name"
-    
-    export CLUSTER_VERSION=$(resolve_cluster_version "$CLUSTER_INTENT" "$FLEET_PROJECT_ID") || exit 1
+    CLUSTER_VERSION_RESOLVED=$(resolve_cluster_version "$CLUSTER_INTENT" "$FLEET_PROJECT_ID")
+    if [[ $? -ne 0 ]]; then
+      exit 1
+    fi
+    export CLUSTER_VERSION="$CLUSTER_VERSION_RESOLVED"
     
     export MAINTENANCE_WINDOW_START=$(parse_csv_optional "$CLUSTER_INTENT" "maintenance_window_start")
     export MAINTENANCE_WINDOW_END=$(parse_csv_optional "$CLUSTER_INTENT" "maintenance_window_end")
@@ -540,8 +587,6 @@ steps:
       [[ -n "${IDENTITY_SERVICE_ARG}" ]] && CMD_ARGS+=("${IDENTITY_SERVICE_ARG}")
       [[ -n "${ROBIN_CNS_ARG}" ]] && CMD_ARGS+=("${ROBIN_CNS_ARG}")
 
-      echo ">>> [Cluster Create] Executing command: $GCLOUD_CMD ${CMD_ARGS[*]}"
-
       out=$(
         $GCLOUD_CMD "${CMD_ARGS[@]}" 2>&1 | tee /dev/fd/5
       )
@@ -625,26 +670,24 @@ steps:
     set +e # Temporarily disable errexit to safely capture PIPESTATUS
     trap - ERR # Prevent trap from hijacking pipe errors
 
-    kubectl create ns config-management-system --dry-run=client -o yaml | kubectl apply -f -
-    rcs=("${PIPESTATUS[@]}")
-    if [[ ${rcs[0]} -ne 0 || ${rcs[1]} -ne 0 ]]; then
-      diag=$(kubectl cluster-info 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Cluster unreachable")
-      [[ ${rcs[0]} -ne 0 ]] && die "Failed to create namespace" "Command failed: kubectl create ns config-management-system --dry-run=client -o yaml (Exit code: ${rcs[0]})" 2 "$diag"
-      [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply namespace" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})" 2 "$diag"
-    fi
+    out=$( (kubectl create ns config-management-system --dry-run=client -o yaml | kubectl apply -f -) 2>&1 ) || {
+      rc=$?
+      set +x
+      diag=$(get_cluster_diag_info "config-management-system")
+      die "Failed to configure namespace" "$out (Exit code: $rc)" 2 "$diag"
+    }
 
     set +x
-    kubectl create secret generic git-creds --namespace="config-management-system" \
+    out=$( (kubectl create secret generic git-creds --namespace="config-management-system" \
         --from-literal=username=default --from-file=token="$(pwd)/git-creds" \
-        --dry-run=client -o yaml | kubectl apply -f -
-    rcs=("${PIPESTATUS[@]}")
-    set -x
-    if [[ ${rcs[0]} -ne 0 || ${rcs[1]} -ne 0 ]]; then
-      diag=$(kubectl cluster-info 2>/dev/null || echo "Cluster unreachable")
-      [[ ${rcs[0]} -ne 0 ]] && die "Failed to create secret" "Command failed: kubectl create secret generic git-creds ... (Exit code: ${rcs[0]})" 2 "$diag"
-      [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply secret" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})" 2 "$diag"
-    fi
+        --dry-run=client -o yaml | kubectl apply -f -) 2>&1 ) || {
+      rc=$?
+      set +x
+      diag=$(get_cluster_diag_info "config-management-system")
+      die "Failed to configure secret" "$out (Exit code: $rc)" 2 "$diag"
+    }
 
+    set -x
     out=$(gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
         --config=./apply-spec.yaml --project $FLEET_PROJECT_ID 2>&1)
     rc=$?
@@ -655,12 +698,14 @@ steps:
     fi
 
     out=$(gcloud storage cp gs://$CLUSTER_INTENT_BUCKET/fleet-packages-rbac.yaml.template . 2>&1) || die "Failed to copy fleet packages RBAC template" "$out"
-    export PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format="value(projectNumber)" 2>&1) || die "Failed to describe project" "$PROJECT_NUMBER"
+    PROJECT_NUMBER_RESOLVED=$(gcloud projects describe $FLEET_PROJECT_ID --format="value(projectNumber)" 2>&1) || die "Failed to describe project" "$PROJECT_NUMBER_RESOLVED"
+    export PROJECT_NUMBER="$PROJECT_NUMBER_RESOLVED"
     
     out=$(envsubst < fleet-packages-rbac.yaml.template > fleet-packages-rbac.yaml 2>&1) || die "Failed to substitute environment variables in template" "$out"
 
     out=$(kubectl apply -f fleet-packages-rbac.yaml 2>&1) || {
-      diag=$(kubectl cluster-info 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Cluster unreachable")
+      set +x
+      diag=$(get_cluster_diag_info)
       die "Failed to apply fleet packages RBAC" "$out" 2 "$diag"
     }
 
@@ -668,10 +713,9 @@ steps:
     if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] &&  ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
       log_build_step "Configuring manual Group RBAC"
       FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)' 2>&1) || die "Failed to describe project for Group RBAC" "$FLEET_PROJECT_NUMBER"
-      kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}' || {
-        rc=$?
+      out=$(kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}' 2>&1) || {
         diag=$(kubectl get clientconfig default -n kube-public -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get clientconfig status")
-        die "Failed to patch clientconfig for Group RBAC" "Exit code: $rc" 2 "$diag"
+        die "Failed to patch clientconfig for Group RBAC" "$out" 2 "$diag"
       }
       log_build_step "Group RBAC applied"
     else
@@ -728,7 +772,7 @@ steps:
     fail=0
     for vm in $vms; do
       echo ">>> [Cluster Create] Shutting down $vm"
-      ./virtctl stop -n vm-workloads $vm || fail=1
+      ./virtctl stop -n vm-workloads $vm || { echo ">>> [Cluster Create] Failed to stop $vm"; fail=1; }
     done
     if [[ $fail -ne 0 ]]; then
       diag=$(kubectl get vmi -n vm-workloads -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get VMI status")
