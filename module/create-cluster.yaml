@@ -540,7 +540,75 @@ steps:
     set +x +eE
     trap - ERR
 
-    if [ -z "${SKIP_HEALTH_CHECK}" ]; then
+    if [[ -z ${SKIP_HEALTH_CHECK} ]]; then
+      # State flag for ConfigSync sequential checks
+      config_sync_ok=true
+
+      # Check 1: Check for ConfigSync CRD to be created (Non-blocking telemetry check)
+      count=0
+      max_retries_for_crd_creation=60 # 5 min
+      log_build_step "Waiting for ConfigSync CRD to be created"
+      while [[ ${count} -lt ${max_retries_for_crd_creation} ]]; do
+        kubectl get customresourcedefinitions configsyncs.configdelivery.gke.io >/dev/null 2>&1 && break
+        sleep 5
+        ((count++))
+      done
+
+      if [[ ${count} -ge ${max_retries_for_crd_creation} ]]; then
+        config_sync_ok=false
+        log_build_step "[WARNING] ConfigSync CRD not created after 5min. Proceeding to default health checks..."
+      fi
+
+      # Check 2: Check for ConfigSync custom resource to be created (Non-blocking telemetry check)
+      if [[ "$config_sync_ok" == "true" ]]; then
+        count=0
+        max_retries_for_configsync_creation=60 # 5 min
+        log_build_step "Waiting for ConfigSync custom resource to be created"
+        while [[ ${count} -lt ${max_retries_for_configsync_creation} ]]; do
+          kubectl get configsyncs.configdelivery.gke.io config-sync >/dev/null 2>&1 && break
+          sleep 5
+          ((count++))
+        done
+
+        if [[ ${count} -ge ${max_retries_for_configsync_creation} ]]; then
+          config_sync_ok=false
+          log_build_step "[WARNING] ConfigSync custom resource not created after 5min. Proceeding to default health checks..."
+        else
+          # Retrieve Hub API Checkpoint (Start Time) from config-sync annotation
+          config_sync_json=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o json 2>/dev/null)
+          creation_time=$(printf '%s\n' "$config_sync_json" | jq -r '.metadata.creationTimestamp // empty' 2>/dev/null)
+          update_time=$(printf '%s\n' "$config_sync_json" | jq -r '.metadata.annotations["configmanagement.gke.io/update-time"] // empty' 2>/dev/null)
+          log_build_step "ConfigSync custom resource detected (Created: ${creation_time:-unknown}, Hub API Start Time: ${update_time:-unknown})"
+        fi
+      fi
+
+      # Check 3: Check for ConfigSync custom resource to be healthy (Non-blocking telemetry check)
+      if [[ "$config_sync_ok" == "true" ]]; then
+        count=0
+        max_retries_for_configsync_healthy=120 # 10 min
+        log_build_step "Waiting for ConfigSync custom resource to be healthy"
+        while [[ ${count} -lt ${max_retries_for_configsync_healthy} ]]; do
+          healthy=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o jsonpath='{.status.healthy}' 2>/dev/null)
+          if [[ "$healthy" == "true" ]]; then
+            log_build_step "ConfigSync custom resource is healthy"
+            break
+          fi
+          sleep 5
+          ((count++))
+        done
+        if [[ ${count} -ge ${max_retries_for_configsync_healthy} ]]; then
+          # Extract concise, single-line error messages for HWM telemetry
+          config_sync_err=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)
+          root_sync_err=$(kubectl get rootsyncs.configsync.gke.io -n config-management-system root-sync -o jsonpath='{.status.conditions[?(@.status=="True")].message}' 2>/dev/null)
+
+          log_build_step "[WARNING] ConfigSync not healthy. Reason: ${config_sync_err:-unknown}. RootSync Error: ${root_sync_err:-none}. Proceeding to default health checks..."
+          
+          # Dump detailed reports to console for human debugging
+          kubectl describe configsyncs.configdelivery.gke.io config-sync 2>/dev/null
+          kubectl describe rootsyncs.configsync.gke.io -n config-management-system root-sync 2>/dev/null
+        fi
+      fi
+
       count=0
       max_retries_for_healthcheck_creation=240 # 1200s/20min
       log_build_step "Waiting for health check resource to be created"
