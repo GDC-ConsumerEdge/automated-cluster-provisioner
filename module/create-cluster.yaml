@@ -74,20 +74,31 @@ steps:
 
       # Temporarily disable tracing to protect the access token from leaking in logs
       set +x
-      out=$(curl -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+      local zone_response=$(curl -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             -H "Content-Type: application/json" \
             -X GET \
-            "${ZONE_URI}" -s | jq '.state' -r)
+            "${ZONE_URI}" -s)
       local curl_status=$?
       set -x
 
       if [[ $curl_status -ne 0 ]]; then
-        die "Failed to signal the zone state"
+        die "Failed to query the zone state"
       fi
 
-      if [[ "$out" == "READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS" || \
-            "$out" == "CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED" || \
-            "$out" == "CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED" ]]; then
+      local zone_state=$(printf '%s\n' "$zone_response" | jq -r '.state // empty' 2>/dev/null)
+      local globally_unique_id=$(printf '%s\n' "$zone_response" | jq -r '.globallyUniqueId // empty' 2>/dev/null)
+
+      if [[ -z "${globally_unique_id}" ]]; then
+        die "The globallyUniqueId from the zone response is empty."
+      fi
+
+      if [[ "${globally_unique_id}" != "${ZONE}" ]]; then
+        die "The current active zone globallyUniqueId (${globally_unique_id}) does not match the ZONE (${ZONE}) configured in this Cloud Build run. This Cloud Build run is using a stale zone ID."
+      fi
+
+      if [[ "$zone_state" == "READY_FOR_CUSTOMER_FACTORY_TURNUP_CHECKS" || \
+            "$zone_state" == "CUSTOMER_FACTORY_TURNUP_CHECKS_STARTED" || \
+            "$zone_state" == "CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED" ]]; then
         echo ">>> [Zone Status] zone signaling enabled"
         export UNDER_FACTORY_CHECKS=TRUE
       else
