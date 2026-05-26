@@ -74,7 +74,7 @@ steps:
 
       # Temporarily disable tracing to protect the access token from leaking in logs
       set +x
-      zone_response=$(curl -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+      local zone_response=$(curl -f -H "Authorization: Bearer $(gcloud auth print-access-token)" \
             -H "Content-Type: application/json" \
             -X GET \
             "${ZONE_URI}" -s)
