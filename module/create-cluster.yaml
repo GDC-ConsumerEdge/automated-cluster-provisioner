@@ -699,13 +699,17 @@ steps:
       set +x
       diag=$(
         kubectl get -f fleet-packages-rbac.yaml -o json 2>/dev/null | jq '
-          .items[] | {
-            kind: .kind,
-            name: .metadata.name,
-            namespace: (.metadata.namespace // empty),
-            created: .metadata.creationTimestamp,
-            subjects: (.subjects // empty)
-          } // empty
+          if (.items | length) == 0 then
+            "No RBAC resources found in the cluster"
+          else
+            .items[] | {
+              kind: .kind,
+              name: .metadata.name,
+              namespace: .metadata.namespace,
+              created: .metadata.creationTimestamp,
+              subjects: .subjects
+            }
+          end
         ' || echo "[DIAGNOSTIC_FAILED] Failed to get fleet packages RBAC status"
       )
       die "Failed to apply fleet packages RBAC" "$out" 2 "$diag"
@@ -735,6 +739,22 @@ steps:
       # State flag for ConfigSync sequential checks
       config_sync_ok=true
 
+      # Check if we are using GKE Hub-managed ConfigSync (v1.21.0+) or legacy ConfigManagement (< v1.21.0)
+      is_modern_config_sync=true
+      if [[ -n "${CS_VERSION}" ]] && ! gdc_version_evaluate "${CS_VERSION}" "1.21.0"; then
+        is_modern_config_sync=false
+      fi
+
+      resource_kind="configsyncs.configdelivery.gke.io"
+      resource_name="config-sync"
+      err_jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
+
+      if [[ "$is_modern_config_sync" == "false" ]]; then
+        resource_kind="configmanagements.configmanagement.gke.io"
+        resource_name="config-management"
+        err_jsonpath='{.status.errors[0]}'
+      fi
+
       # Check 1: Check for ConfigSync CRD to be created (Non-blocking telemetry check)
       count=0
       max_retries_for_crd_creation=60 # 5 min
@@ -756,7 +776,7 @@ steps:
         max_retries_for_configsync_creation=60 # 5 min
         log_build_step "Waiting for ConfigSync custom resource to be created"
         while [[ ${count} -lt ${max_retries_for_configsync_creation} ]]; do
-          kubectl get configsyncs.configdelivery.gke.io config-sync >/dev/null 2>&1 && break
+          kubectl get ${resource_kind} ${resource_name} >/dev/null 2>&1 && break
           sleep 5
           ((count++))
         done
@@ -766,7 +786,7 @@ steps:
           log_build_step "[WARNING] ConfigSync custom resource not created after 5min. Proceeding to default health checks..."
         else
           # Retrieve Hub API Checkpoint (Start Time) from config-sync annotation
-          config_sync_json=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o json 2>/dev/null)
+          config_sync_json=$(kubectl get ${resource_kind} ${resource_name} -o json 2>/dev/null)
           creation_time=$(printf '%s\n' "$config_sync_json" | jq -r '.metadata.creationTimestamp // empty' 2>/dev/null)
           update_time=$(printf '%s\n' "$config_sync_json" | jq -r '.metadata.annotations["configmanagement.gke.io/update-time"] // empty' 2>/dev/null)
           log_build_step "ConfigSync custom resource detected (Created: ${creation_time:-unknown}, Hub API Start Time: ${update_time:-unknown})"
@@ -779,7 +799,7 @@ steps:
         max_retries_for_configsync_healthy=120 # 10 min
         log_build_step "Waiting for ConfigSync custom resource to be healthy"
         while [[ ${count} -lt ${max_retries_for_configsync_healthy} ]]; do
-          healthy=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o jsonpath='{.status.healthy}' 2>/dev/null)
+          healthy=$(kubectl get ${resource_kind} ${resource_name} -o jsonpath='{.status.healthy}' 2>/dev/null)
           if [[ "$healthy" == "true" ]]; then
             log_build_step "ConfigSync custom resource is healthy"
             break
@@ -789,13 +809,13 @@ steps:
         done
         if [[ ${count} -ge ${max_retries_for_configsync_healthy} ]]; then
           # Extract concise, single-line error messages for HWM telemetry
-          config_sync_err=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)
+          config_sync_err=$(kubectl get ${resource_kind} ${resource_name} -o jsonpath="${err_jsonpath}" 2>/dev/null)
           root_sync_err=$(kubectl get rootsyncs.configsync.gke.io -n config-management-system root-sync -o jsonpath='{.status.conditions[?(@.status=="True")].message}' 2>/dev/null)
 
           log_build_step "[WARNING] ConfigSync not healthy. Reason: ${config_sync_err:-unknown}. RootSync Error: ${root_sync_err:-none}. Proceeding to default health checks..."
           
           # Dump detailed reports to console for human debugging
-          kubectl describe configsyncs.configdelivery.gke.io config-sync 2>/dev/null
+          kubectl describe ${resource_kind} ${resource_name} 2>/dev/null
           kubectl describe rootsyncs.configsync.gke.io -n config-management-system root-sync 2>/dev/null
         fi
       fi
@@ -866,14 +886,18 @@ steps:
     if [[ $fail -ne 0 ]]; then
       diag=$(
         kubectl get vmi -n vm-workloads -o json 2>/dev/null | jq '
-          .items[] | {
-            name: .metadata.name,
-            node: .status.nodeName,
-            phase: .status.phase,
-            terminating_since: .metadata.deletionTimestamp,
-            conditions: [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}],
-            migration: (if .status.migrationState then (.status.migrationState | {source: .sourceNode, target: .targetNode, status: .status, error: .abortReason}) else empty end)
-          } // empty
+          if (.items | length) == 0 then
+            "No running VMs found in namespace vm-workloads"
+          else
+            .items[] | {
+              name: .metadata.name,
+              node: .status.nodeName,
+              phase: .status.phase,
+              terminating_since: .metadata.deletionTimestamp,
+              conditions: [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}],
+              migration: (if .status.migrationState then (.status.migrationState | {source: .sourceNode, target: .targetNode, status: .status, error: .abortReason}) else null end)
+            }
+          end
         ' || echo "[DIAGNOSTIC_FAILED] Failed to get VMI status"
       )
       die "Unsuccessful VM termination sequence" "Failed to stop all VMs" 2 "$diag"
