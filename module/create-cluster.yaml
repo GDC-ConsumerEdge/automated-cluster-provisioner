@@ -80,49 +80,6 @@ steps:
       zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_STARTED "$message"
     )
 
-    # Retrieves a compact, single-line diagnostic summary of cluster nodes and optional namespace.
-    # It makes exactly 1 kubectl API request for nodes to prevent overloading the API Server.
-    #
-    # Ideal Output Examples (Healthy):
-    #   - With namespace parameter:
-    #     "Cluster: Connected | Nodes: 3/3 Ready | Namespace: config-management-system (Active)"
-    #   - Without namespace parameter:
-    #     "Cluster: Connected | Nodes: 3/3 Ready"
-    #
-    # Unhealthy Output Example (e.g. Node 3 is NotReady):
-    #     "Cluster: Connected | Nodes: 2/3 Ready (Unhealthy: gmec-bjc9003.ba.l.google.com) | Namespace: config-management-system (Active)"
-    #
-    # Unreachable Output Example:
-    #     "Cluster Status: Unreachable"
-    function get_cluster_diag_info() {
-      local target_ns=$1
-      local ns_status_str=""
-      
-      local node_info
-      if ! node_info=$(kubectl get nodes --no-headers 2>/dev/null); then
-        echo "Cluster Status: Unreachable"
-        return
-      fi
-
-      local total_nodes=$(echo "$node_info" | wc -l || echo "0")
-      local ready_nodes=$(echo "$node_info" | grep -c ' Ready' || echo "0")
-      
-      local unhealthy_list=""
-      if [[ $ready_nodes -lt $total_nodes ]]; then
-        local names=$(echo "$node_info" | grep -v ' Ready' | awk '{print $1}' | tr '\n' ',' | sed 's/,$//')
-        unhealthy_list=" (Unhealthy: $names)"
-      fi
-
-      # Attach target namespace status if provided
-      if [[ -n "$target_ns" ]]; then
-        local ns_status=$(kubectl get ns "$target_ns" --no-headers 2>/dev/null | awk '{print $2}')
-        [[ -z "$ns_status" ]] && ns_status="NOT_FOUND"
-        ns_status_str=" | Namespace: $target_ns ($ns_status)"
-      fi
-
-      echo "Cluster: Connected | Nodes: $ready_nodes/$total_nodes Ready$unhealthy_list$ns_status_str"
-    }
-
     # Sets the `UNDER_FACTORY_CHECKS` to either true if ZoneState is ready, started, or failed
     # or false for all other ZoneStates or for provisioning that bypasses the ZoneState.
     function set_factory_check_flag() {
@@ -684,7 +641,7 @@ steps:
     out=$( (kubectl create ns config-management-system --dry-run=client -o yaml | kubectl apply -f -) 2>&1 ) || {
       rc=$?
       set +x
-      diag=$(get_cluster_diag_info "config-management-system")
+      diag=$(kubectl get ns config-management-system -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get namespace status")
       die "Failed to configure namespace" "$out (Exit code: $rc)" 2 "$diag"
     }
 
@@ -694,7 +651,16 @@ steps:
         --dry-run=client -o yaml | kubectl apply -f -) 2>&1 ) || {
       rc=$?
       set +x
-      diag=$(get_cluster_diag_info "config-management-system")
+      diag=$(
+        kubectl get secret git-creds -n config-management-system -o json 2>/dev/null | jq '
+          {
+            name: .metadata.name,
+            type: .type,
+            created: .metadata.creationTimestamp,
+            data_keys: (.data | keys)
+          } // empty
+        ' || echo "[DIAGNOSTIC_FAILED] Failed to get secret status"
+      )
       die "Failed to configure secret" "$out (Exit code: $rc)" 2 "$diag"
     }
 
@@ -704,7 +670,22 @@ steps:
     rc=$?
     set -e
     if [[ $rc -ne 0 ]]; then
-      diag=$(kubectl get rootsync -n config-management-system -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get RootSync status")
+      diag=$(
+        kubectl get rootsync root-sync -n config-management-system -o json 2>/dev/null | jq '
+          {
+            repo: .spec.git.repo,
+            dir: .spec.git.dir,
+            last_synced_commit: .status.lastSyncedCommit,
+            conditions: [.status.conditions[]? | {
+              type: .type,
+              status: .status,
+              message: .message
+            }],
+            render_errors: .status.rendering.errors,
+            sync_errors: .status.sync.errors
+          } // empty
+        ' || echo "[DIAGNOSTIC_FAILED] Failed to get RootSync status"
+      )
       die "Config Sync apply failed" "$out" 2 "$diag"
     fi
 
@@ -716,7 +697,17 @@ steps:
 
     out=$(kubectl apply -f fleet-packages-rbac.yaml 2>&1) || {
       set +x
-      diag=$(get_cluster_diag_info)
+      diag=$(
+        kubectl get -f fleet-packages-rbac.yaml -o json 2>/dev/null | jq '
+          .items[] | {
+            kind: .kind,
+            name: .metadata.name,
+            namespace: (.metadata.namespace // empty),
+            created: .metadata.creationTimestamp,
+            subjects: (.subjects // empty)
+          } // empty
+        ' || echo "[DIAGNOSTIC_FAILED] Failed to get fleet packages RBAC status"
+      )
       die "Failed to apply fleet packages RBAC" "$out" 2 "$diag"
     }
 
@@ -725,7 +716,11 @@ steps:
       log_build_step "Configuring manual Group RBAC"
       FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)' 2>&1) || die "Failed to describe project for Group RBAC" "$FLEET_PROJECT_NUMBER"
       out=$(kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}' 2>&1) || {
-        diag=$(kubectl get clientconfig default -n kube-public -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get clientconfig status")
+        diag=$(
+          kubectl get clientconfig default -n kube-public -o json 2>/dev/null | jq '
+            {authentication: .spec.authentication, status: .status} // empty
+          ' || echo "[DIAGNOSTIC_FAILED] Failed to get clientconfig status"
+        )
         die "Failed to patch clientconfig for Group RBAC" "$out" 2 "$diag"
       }
       log_build_step "Group RBAC applied"
@@ -814,13 +809,24 @@ steps:
         ((count++))
       done
       if [[ ${count} -ge ${max_retries_for_healthcheck_creation} ]]; then
-        diag=$(kubectl get crd healthchecks.validator.gdc.gke.io -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] CRD not found")
+        diag=$(
+          kubectl get crd healthchecks.validator.gdc.gke.io -o json 2>/dev/null | jq '
+            {
+              name: .metadata.name,
+              conditions: [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}]
+            } // empty
+          ' || echo "[DIAGNOSTIC_FAILED] CRD not found"
+        )
         die "Health check resource not created after 20min" "Timeout waiting for resource creation" 4 "$diag"
       fi
 
       log_build_step "Waiting for platform healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy --timeout=1h; then
-        diag=$(kubectl get healthchecks.validator.gdc.gke.io/default -o yaml 2>/dev/null || echo "Failed to get healthcheck status")
+        diag=$(
+          kubectl get healthchecks.validator.gdc.gke.io/default -o json 2>/dev/null | jq '
+            [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}] // empty
+          ' || echo "Failed to get healthcheck status"
+        )
         die "Platform is not healthy after 1h" "Timeout waiting for condition=PlatformHealthy" 4 "$diag"
       fi
 
@@ -831,7 +837,11 @@ steps:
 
       log_build_step "Waiting for workload healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy --timeout="${WORKLOAD_TIMEOUT}s"; then
-        diag=$(kubectl get healthchecks.validator.gdc.gke.io/default -o yaml 2>/dev/null || echo "Failed to get healthcheck status")
+        diag=$(
+          kubectl get healthchecks.validator.gdc.gke.io/default -o json 2>/dev/null | jq '
+            [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}] // empty
+          ' || echo "Failed to get healthcheck status"
+        )
         die "[CUSTOMER_ERROR] Workloads are not healthy after ${WORKLOAD_TIMEOUT}s" "Timeout waiting for condition=WorkloadsHealthy" 4 "$diag"
       fi
     fi
@@ -854,7 +864,18 @@ steps:
       ./virtctl stop -n vm-workloads $vm || { echo ">>> [Cluster Create] Failed to stop $vm"; fail=1; }
     done
     if [[ $fail -ne 0 ]]; then
-      diag=$(kubectl get vmi -n vm-workloads -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get VMI status")
+      diag=$(
+        kubectl get vmi -n vm-workloads -o json 2>/dev/null | jq '
+          .items[] | {
+            name: .metadata.name,
+            node: .status.nodeName,
+            phase: .status.phase,
+            terminating_since: .metadata.deletionTimestamp,
+            conditions: [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}],
+            migration: (if .status.migrationState then (.status.migrationState | {source: .sourceNode, target: .targetNode, status: .status, error: .abortReason}) else empty end)
+          } // empty
+        ' || echo "[DIAGNOSTIC_FAILED] Failed to get VMI status"
+      )
       die "Unsuccessful VM termination sequence" "Failed to stop all VMs" 2 "$diag"
     fi
 
