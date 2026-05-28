@@ -73,7 +73,38 @@ def _zone_watcher_worker(
     cb_client = clients.get_cloudbuild_client()
     count = 0
 
-    zones = get_zones(machine_project, location)
+    hwm_status = 1
+    failure_reason = ""
+    try:
+        zones = get_zones(machine_project, location)
+    except Exception as err:
+        logger.exception(
+            "Error listing zones (HWM API) for project: %s, location: %s",
+            machine_project,
+            location,
+        )
+        hwm_status = 0
+        failure_reason = _get_failure_reason(err)
+
+    report_api_connectivity_metric(
+        host_project_id=params.project_id,
+        api="hwm",
+        project_type="machine_project",
+        project_id=machine_project,
+        location=location,
+        status=hwm_status,
+        failure_reason=failure_reason,
+    )
+
+    if hwm_status == 0:
+        thread_end_time = time.perf_counter()
+        logger.error(
+            "Thread zone_watcher(%s, %s) failed because HWM API was unreachable. Took %0.2f seconds",
+            machine_project,
+            location,
+            thread_end_time - thread_start_time,
+        )
+        return 0
 
     for store_id in stores:
         store_info = stores[store_id]
@@ -225,6 +256,8 @@ def zone_watcher(req: flask.Request):
         }
         for future in concurrent.futures.as_completed(machine_futures):
             machine_project, location = machine_futures[future]
+            edgecontainer_status = 1
+            failure_reason = ""
             try:
                 res_pager = future.result()
                 for m in res_pager:
@@ -234,8 +267,23 @@ def zone_watcher(req: flask.Request):
                     else:
                         machine_lists[m.zone].append(m)
             except Exception as err:
-                logger.error(f"Error listing machines for project: {machine_project}, location: {location}")
-                logger.error(err)
+                logger.exception(
+                    "Error listing machines for project: %s, location: %s",
+                    machine_project,
+                    location,
+                )
+                edgecontainer_status = 0
+                failure_reason = _get_failure_reason(err)
+
+            report_api_connectivity_metric(
+                host_project_id=params.project_id,
+                api="edgecontainer",
+                project_type="machine_project",
+                project_id=machine_project,
+                location=location,
+                status=edgecontainer_status,
+                failure_reason=failure_reason,
+            )
 
     count = 0
     unprocessed_zones_lock = threading.Lock()
@@ -283,14 +331,33 @@ def _cluster_watcher_worker(
         parent=ec_client.common_location_path(project_id, location)
     )
     
+    edgecontainer_status = 1
+    failure_reason = ""
     try:
         res_pager_c = ec_client.list_clusters(req_c)
         clusters_by_zone: Dict[str, list[edgecontainer.Cluster]] = defaultdict(list)
         for c in res_pager_c:
             clusters_by_zone[c.control_plane.local.node_location].append(c)
     except Exception as err:
-        logger.error(f"Error listing clusters for project: {project_id}, location: {location}")
-        logger.error(err)
+        logger.exception(
+            "Error listing clusters for project: %s, location: %s",
+            project_id,
+            location,
+        )
+        edgecontainer_status = 0
+        failure_reason = _get_failure_reason(err)
+
+    report_api_connectivity_metric(
+        host_project_id=params.project_id,
+        api="edgecontainer",
+        project_type="fleet_project",
+        project_id=project_id,
+        location=location,
+        status=edgecontainer_status,
+        failure_reason=failure_reason,
+    )
+
+    if edgecontainer_status == 0:
         return 0
 
     for store_id in stores:
@@ -530,6 +597,76 @@ def zone_active_metric(req: flask.Request):
     logger.debug(f'update datapoint for {[x["metric"]["labels"]["store_id"] for x in time_series_data]}')
     logger.debug(f'total zone active flag updated = {len(time_series_data)}')
     return f'total zone active flag updated = {len(time_series_data)}'
+
+
+def _get_failure_reason(err: Exception) -> str:
+    """Determines the failure reason based on exception type."""
+    if isinstance(err, (exceptions.PermissionDenied, exceptions.Unauthenticated)):
+        return "permission_denied"
+    elif isinstance(err, exceptions.InvalidArgument):
+        return "invalid_argument"
+    elif isinstance(err, exceptions.NotFound):
+        return "not_found"
+    elif isinstance(err, exceptions.ResourceExhausted):
+        return "quota_exceeded"
+    return "unreachable"
+
+
+def report_api_connectivity_metric(
+    host_project_id: str,
+    api: str,
+    project_type: str,
+    project_id: str,
+    location: str,
+    status: int,  # 1 for success, 0 for failure
+    failure_reason: str = "",
+):
+    """Reports the API connectivity metric to Cloud Monitoring."""
+    logger.info(
+        "Reporting API connectivity metric: api=%s, project_type=%s, "
+        "project_id=%s, location=%s, status=%d, failure_reason=%s",
+        api,
+        project_type,
+        project_id,
+        location,
+        status,
+        failure_reason,
+    )
+    try:
+        m_client = clients.get_monitoring_client()
+        timestamp = Timestamp()
+        timestamp.GetCurrentTime()
+        data_point = {
+            'interval': {'end_time': timestamp},
+            'value': {'int64_value': status}
+        }
+        time_series_point = {
+            'metric': {
+                'type': 'custom.googleapis.com/gdc_api_connectivity',
+                'labels': {
+                    'api': api,
+                    'project_type': project_type,
+                    'target_project_id': project_id,
+                    'location': location,
+                    'failure_reason': failure_reason,
+                }
+            },
+            'resource': {
+                'type': 'global',
+                'labels': {
+                    'project_id': host_project_id
+                }
+            },
+            'points': [data_point]
+        }
+        request = monitoring_v3.CreateTimeSeriesRequest({
+            'name': f'projects/{host_project_id}',
+            'time_series': [time_series_point]
+        })
+        m_client.create_time_series(request)
+    except Exception as e:
+        logger.error("Failed to report API connectivity metric: %s", e, exc_info=True)
+
 
 def read_intent_data(params, named_key) -> Dict[Tuple, Dict[str, SourceOfTruthModel]]:
     """Returns a data structure containing project, location, and store information  
