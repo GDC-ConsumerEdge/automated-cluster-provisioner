@@ -22,6 +22,10 @@ steps:
     set +x
     set -o pipefail
 
+    # Capture all output to a file for log_tail in case of failure
+    LOG_FILE="/tmp/acp_execution_create_cluster_${BUILD_ID}.log"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+
     HARDWARE_MANAGEMENT_API_ENDPOINT="https://gdchardwaremanagement.googleapis.com"
     if [[ -n "${HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE}" ]]; then
       HARDWARE_MANAGEMENT_API_ENDPOINT=${HARDWARE_MANAGEMENT_API_ENDPOINT_OVERRIDE}
@@ -29,22 +33,37 @@ steps:
     HARDWARE_MANAGEMENT_API_VERSION="v1alpha"
 
     function die() {
+      if [[ "${INSIDE_DIE:-}" == "TRUE" ]]; then
+        echo ">>> [CRITICAL] Recursive call to die detected. Exiting immediately."
+        exit 1
+      fi
+      export INSIDE_DIE=TRUE
       set +x
+
       step="[Build: ${BUILD_ID}] $1"
       details=$2
+      # Clean up logs by removing progress dots and ANSI color codes
+      details=$(echo "$details" | sed -e 's/\.\{5,\}//g' -e 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+      
+      local code=${3:-2}
+      diag_output=$4
+      
+      # Capture last 30 lines of log for context
+      local log_tail=$(tail -n 30 "$LOG_FILE" 2>/dev/null)
       echo ">>> [ERROR] $step"
       echo ">>> [ERROR] Details: $details"
+      [[ -n "$diag_output" ]] && echo ">>> [ERROR] Diagnostic Output: $diag_output"
       echo ">>> [ERROR] [Build: ${BUILD_ID}] Cluster Creation Failed for $CLUSTER_NAME: $1"
 
       if [[ "$MAX_RETRIES" -eq 0 ]]; then
         echo ">>> [ERROR] Marking zone as failed"
-        zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
+        zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_FAILED "$step" "$details" "$diag_output" "$log_tail" "$code"
       else
         # Instead of querying build history with gcloud (which is slow and was counting builds from previous lifecycles),
         # we directly use the TRY_COUNT passed from Zone Watcher to check if we exceeded MAX_RETRIES.
         if [[ "$TRY_COUNT" -gt "$MAX_RETRIES" ]]; then
           echo ">>> [ERROR] Current try count $TRY_COUNT has exhausted max retries $MAX_RETRIES. Marking zone as failed"
-          zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_FAILED "$step" "$details"
+          zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_FAILED "$step" "$details" "$diag_output" "$log_tail" "$code"
         else
           echo ">>> [ERROR] Current try count $TRY_COUNT is <= max retries $MAX_RETRIES. Skipping failure signal to allow next retry."
         fi
@@ -82,7 +101,7 @@ steps:
       set -x
 
       if [[ $curl_status -ne 0 ]]; then
-        die "Failed to query the zone state"
+        die "Failed to query the zone state" "$out" 14
       fi
 
       local zone_state=$(printf '%s\n' "$zone_response" | jq -r '.state // empty' 2>/dev/null)
@@ -112,6 +131,9 @@ steps:
       state_signal=$2
       step=$3
       details=$4
+      diag_output=$5
+      log_tail=$6
+      local code=$7
 
       [[ -z "${zone_store_path}" ]] && { echo ">>> [Zone Signal] zone_store_path not provided"; return ; }
 
@@ -124,19 +146,114 @@ steps:
         echo ">>> [Zone Signal] Suppressing message details (OPT_IN_BUILD_MESSAGES != TRUE)"
         step=""
         details=""
+        diag_output=""
+        log_tail=""
       fi
 
       SIGNAL_URI="${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/${zone_store_path}:signal"
 
-      # Use jq to safely generate JSON payload. 
-      # Manual string concatenation (e.g. "{\"key\": \"$VAL\"}") breaks if $VAL contains 
-      # unescaped double quotes (common in gcloud error messages). jq --arg handles escaping automatically.
-      if [[ $state_signal == "FACTORY_TURNUP_CHECKS_STARTED" ]]; then
-        state_signal_payload=$(jq -n --arg ss "$state_signal" --arg st "$step" '{"state_signal": $ss, "step": $st}')
-      elif [[ $state_signal == "FACTORY_TURNUP_CHECKS_FAILED" ]]; then
-        state_signal_payload=$(jq -n --arg ss "$state_signal" --arg st "$step" --arg dt "$details" '{"state_signal": $ss, "step": $st, "details": $dt}')
-      else
-        state_signal_payload=$(jq -n --arg ss "$state_signal" '{"state_signal": $ss}')
+      # Unified, elegant single jq call to build different payloads conditionally.
+      # This is robust against null/empty/special characters and guarantees valid JSON.
+      local state_signal_payload
+      state_signal_payload=$(jq -n \
+        --arg signal "$state_signal" \
+        --arg step "$step" \
+        --arg build_id "${BUILD_ID:-}" \
+        --arg cluster_version "${CLUSTER_VERSION:-}" \
+        --argjson code "${code:-2}" \
+        --arg reason "PROVISIONING_FAILED" \
+        --arg domain "acp.gdc.gke.io" \
+        --arg raw_error "$details" \
+        --arg diag "$diag_output" \
+        --arg tail "$log_tail" \
+        --arg store_id "${STORE_ID:-}" \
+        --arg machine_project_id "${MACHINE_PROJECT_ID:-}" \
+        --arg fleet_project_id "${FLEET_PROJECT_ID:-}" \
+        --arg cluster_name "${CLUSTER_NAME:-}" \
+        --arg location "${LOCATION:-}" \
+        --arg node_count "${NODE_COUNT:-}" \
+        --arg cluster_ipv4_cidr "${CLUSTER_IPV4_CIDR:-}" \
+        --arg services_ipv4_cidr "${SERVICES_IPV4_CIDR:-}" \
+        --arg external_load_balancer_ipv4_address_pools "${EXTERNAL_LOAD_BALANCER_IPV4_ADDRESS_POOLS:-}" \
+        --arg sync_repo "${SYNC_REPO:-}" \
+        --arg sync_branch "${SYNC_BRANCH:-}" \
+        --arg sync_dir "${SYNC_DIR:-}" \
+        --arg secrets_project_id "${SECRETS_PROJECT_ID:-}" \
+        --arg git_token_secrets_manager_name "${GIT_TOKEN_SECRETS_MANAGER_NAME:-}" \
+        --arg maintenance_window_start "${MAINTENANCE_WINDOW_START:-}" \
+        --arg maintenance_window_end "${MAINTENANCE_WINDOW_END:-}" \
+        --arg maintenance_window_recurrence "${MAINTENANCE_WINDOW_RECURRENCE:-}" \
+        --arg subnet_vlans "${SUBNET_VLANS:-}" \
+        --arg enable_robin_cns "${ENABLE_ROBIN_CNS:-}" \
+        --arg zone_name "${ZONE_NAME_FROM_SOT:-}" \
+        --arg labels "${LABELS:-}" \
+        'if $signal == "FACTORY_TURNUP_CHECKS_STARTED" then
+          {
+            state_signal: $signal,
+            step: $step
+          }
+        elif $signal == "FACTORY_TURNUP_CHECKS_FAILED" then
+          {
+            state_signal: $signal,
+            step: $step,
+            provisioning_context: {
+              build_id: $build_id,
+              cluster_version: $cluster_version,
+              cluster_intent: {
+                store_id: $store_id,
+                machine_project_id: $machine_project_id,
+                fleet_project_id: $fleet_project_id,
+                cluster_name: $cluster_name,
+                location: $location,
+                node_count: $node_count,
+                cluster_ipv4_cidr: $cluster_ipv4_cidr,
+                services_ipv4_cidr: $services_ipv4_cidr,
+                external_load_balancer_ipv4_address_pools: $external_load_balancer_ipv4_address_pools,
+                sync_repo: $sync_repo,
+                sync_branch: $sync_branch,
+                sync_dir: $sync_dir,
+                secrets_project_id: $secrets_project_id,
+                git_token_secrets_manager_name: $git_token_secrets_manager_name,
+                cluster_version: $cluster_version,
+                maintenance_window_start: $maintenance_window_start,
+                maintenance_window_end: $maintenance_window_end,
+                maintenance_window_recurrence: $maintenance_window_recurrence,
+                subnet_vlans: $subnet_vlans,
+                enable_robin_cns: $enable_robin_cns,
+                zone_name: $zone_name,
+                labels: $labels
+              }
+            },
+            error: {
+              code: $code,
+              message: $step,
+              details: [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": $reason,
+                "domain": $domain,
+                "metadata": {
+                  "raw_error": $raw_error,
+                  "diagnostic_output": $diag,
+                  "log_tail": $tail
+                }
+              }]
+            }
+          }
+        else
+          {
+            state_signal: $signal
+          }
+        end')
+
+      if [[ $? -ne 0 || -z "$state_signal_payload" ]]; then
+        echo ">>> [Zone Signal] [WARNING] Failed to construct rich payload. Falling back to original basic payload." >&2
+        if [[ "$state_signal" == "FACTORY_TURNUP_CHECKS_STARTED" ]]; then
+          state_signal_payload="{\"state_signal\": \"${state_signal}\", \"step\": \"${step}\"}"
+        elif [[ "$state_signal" == "FACTORY_TURNUP_CHECKS_FAILED" ]]; then
+          state_signal_payload="{\"state_signal\": \"${state_signal}\", \"step\": \"${step}\", \"details\": \"Provisioning failed\"}"
+        else
+          state_signal_payload="{\"state_signal\": \"${state_signal}\"}"
+        fi
       fi
 
       echo ">>> [Zone Signal] Sending '${state_signal}' to ${zone_store_path}..."
@@ -148,9 +265,13 @@ steps:
             "${SIGNAL_URI}" \
             -d "$state_signal_payload")
 
-
       if [[ $? -ne 0 ]]; then
-        die "Failed to signal the zone state"
+        if [[ "${INSIDE_DIE:-}" == "TRUE" ]]; then
+          echo ">>> [Zone Signal] [CRITICAL] Failed to send signal ${state_signal} to API while inside die." >&2
+          exit 1
+        else
+          die "Failed to signal the zone state" "$out" 14
+        fi
       fi
       
       echo ">>> [Zone Signal] Successfully signaled ${state_signal}."
@@ -164,7 +285,7 @@ steps:
       max_retries_for_signal_completion=10
       while [[ ${signal_attempts} -lt ${max_retries_for_signal_completion} ]]; do
         is_completed=$(curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-            "${URI}" | jq -r .done)
+            "${URI}" | jq -r .done 2>/dev/null)
         
         echo ">>> [Zone Signal] Poll attempt $((signal_attempts+1))/${max_retries_for_signal_completion} - done: ${is_completed}"
         
@@ -174,7 +295,12 @@ steps:
       done
       
       if [[ ${signal_attempts} -ge ${max_retries_for_signal_completion} ]]; then
-        die "Signal operation timed out"
+        if [[ "${INSIDE_DIE:-}" == "TRUE" ]]; then
+          echo ">>> [Zone Signal] [CRITICAL] Signal operation timed out waiting for completion while inside die." >&2
+          exit 1
+        else
+          die "Signal operation timed out" "Operation $operation_id did not complete after $((max_retries_for_signal_completion * 5)) seconds." 4
+        fi
       else
         echo ">>> [Zone Signal] Operation completed successfully."
         return 0
@@ -187,10 +313,10 @@ steps:
 
       output=$(echo "$input" | csvtool namedcol "$column" - | csvtool drop 1 - | tr -d '"')
 
-      [[ $? -ne 0 ]] && die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] missing column header: $column" >&2
+      [[ $? -ne 0 ]] && die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] missing column header: $column" "Input data:\n$input" 3 >&2
 
       if [ -z "$output" ]; then
-        die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] empty cell value: $column" >&2
+        die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] empty cell value: $column" "Input data:\n$input" 3 >&2
       fi
 
       echo "$output"
@@ -225,12 +351,12 @@ steps:
       local fleet_config_path="repo/$FLEET_CONFIG_PATH"
       
       if [[ ! -f "$fleet_config_path" ]]; then
-         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Fleet config file not found at $fleet_config_path but required for fallback" >&2
+         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Fleet config file not found at $fleet_config_path but required for fallback" "Please check if the git repository contains the file at path: $FLEET_CONFIG_PATH" 5 >&2
       fi
       local row=$(awk -F , "\$1 == \"$project_id\" || \$1 == \"\\\"$project_id\\\"\"" "$fleet_config_path")
       
       if [[ -z "$row" ]]; then
-         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Project $project_id not found in $fleet_config_path" >&2
+         die "[CONFIG_VALIDATION_FAILED][cluster:${CLUSTER_NAME:-unknown}] Project $project_id not found in $fleet_config_path" "File contents of $fleet_config_path:\n$(cat "$fleet_config_path" 2>/dev/null)" 5 >&2
       fi
       
       local header=$(head -1 "$fleet_config_path")
@@ -301,18 +427,18 @@ steps:
     # Preemptively install required packages silently to maintain clean visual layouts
     apt-get update -qq && apt-get install -y -qq gettext-base csvtool jq > /dev/null
 
-    [[ -z "${STORE_ID}" ]] && die "[CONFIG_VALIDATION_FAILED] STORE_ID not set. Please ensure store_id is provided in the trigger."
+    [[ -z "${STORE_ID}" ]] && die "[CONFIG_VALIDATION_FAILED] STORE_ID not set. Please ensure store_id is provided in the trigger." "" 3
 
     NODE_LOCATION=${ZONE}
-    [[ -z "$NODE_LOCATION" ]] && die "[CONFIG_VALIDATION_FAILED] ZONE not set. Please ensure zone is provided in the trigger."
+    [[ -z "$NODE_LOCATION" ]] && die "[CONFIG_VALIDATION_FAILED] ZONE not set. Please ensure zone is provided in the trigger." "" 3
 
-    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to retrieve git token from Secret Manager. Please check secret name and permissions."
-    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to clone source of truth repository. Please check repo URL and branch."
-    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to copy cluster intent file. Please check if SOURCE_OF_TRUTH_PATH is correct."
+    TOKEN=$(gcloud secrets versions access latest --secret=$GIT_SECRET_ID --project $GIT_SECRETS_PROJECT_ID) || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to retrieve git token from Secret Manager" "Secret name: $GIT_SECRET_ID, Project ID: $GIT_SECRETS_PROJECT_ID" 7
+    git clone -b $SOURCE_OF_TRUTH_BRANCH https://oauth2:$TOKEN@$SOURCE_OF_TRUTH_REPO repo || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to clone source of truth repository" "Repo: $SOURCE_OF_TRUTH_REPO, Branch: $SOURCE_OF_TRUTH_BRANCH" 7
+    cp repo/$SOURCE_OF_TRUTH_PATH ./cluster-intent-registry.csv || die "[CUSTOMER_ERROR][store:${STORE_ID}] Failed to copy cluster intent file" "Source of truth path: $SOURCE_OF_TRUTH_PATH" 5
 
     export CLUSTER_INTENT_ROW=$(awk -F , "\$1 == \"$STORE_ID\" || \$1 == \"\\\"$STORE_ID\\\"\"" cluster-intent-registry.csv)
     echo ">>> [SoT Parse] $CLUSTER_INTENT_ROW"
-    [[ -z "$CLUSTER_INTENT_ROW" ]] && die "[CONFIG_VALIDATION_FAILED] Cluster intent not found for store: $STORE_ID"
+    [[ -z "$CLUSTER_INTENT_ROW" ]] && die "[CONFIG_VALIDATION_FAILED] Cluster intent not found for store: $STORE_ID" "Store ID: $STORE_ID, Intent CSV file contents:\n$(cat cluster-intent-registry.csv 2>/dev/null)" 5
     export CLUSTER_INTENT_HEADER=$(head -1 cluster-intent-registry.csv)
     export CLUSTER_INTENT="$CLUSTER_INTENT_HEADER"$'\n'"$CLUSTER_INTENT_ROW"
 
@@ -331,8 +457,11 @@ steps:
     assign_required SYNC_DIR "sync_dir"
     assign_required SECRETS_PROJECT_ID "secrets_project_id"
     assign_required GIT_TOKEN_SECRETS_MANAGER_NAME "git_token_secrets_manager_name"
-    
-    export CLUSTER_VERSION=$(resolve_cluster_version "$CLUSTER_INTENT" "$FLEET_PROJECT_ID") || exit 1
+    CLUSTER_VERSION_RESOLVED=$(resolve_cluster_version "$CLUSTER_INTENT" "$FLEET_PROJECT_ID")
+    if [[ $? -ne 0 ]]; then
+      exit 1
+    fi
+    export CLUSTER_VERSION="$CLUSTER_VERSION_RESOLVED"
     
     export MAINTENANCE_WINDOW_START=$(parse_csv_optional "$CLUSTER_INTENT" "maintenance_window_start")
     export MAINTENANCE_WINDOW_END=$(parse_csv_optional "$CLUSTER_INTENT" "maintenance_window_end")
@@ -405,7 +534,7 @@ steps:
           # Update command to use alpha until this flag is GA'ed
           GCLOUD_CMD="gcloud alpha"
         else
-          die "[INVALID_ROBIN_REQUEST][cluster:${CLUSTER_NAME:-unknown}] Invalid Robin CNS request: Robin CNS requires version 1.12.0+ but got ${CLUSTER_VERSION}"
+          die "[INVALID_ROBIN_REQUEST][cluster:${CLUSTER_NAME:-unknown}] Invalid Robin CNS request" "Robin CNS requires version 1.12.0+ but got ${CLUSTER_VERSION}" 9
         fi
       fi
 
@@ -426,13 +555,11 @@ steps:
       [[ -n "${IDENTITY_SERVICE_ARG}" ]] && CMD_ARGS+=("${IDENTITY_SERVICE_ARG}")
       [[ -n "${ROBIN_CNS_ARG}" ]] && CMD_ARGS+=("${ROBIN_CNS_ARG}")
 
-      echo ">>> [Cluster Create] Executing command: $GCLOUD_CMD ${CMD_ARGS[*]}"
-
       out=$(
         $GCLOUD_CMD "${CMD_ARGS[@]}" 2>&1 | tee /dev/fd/5
       )
 
-      [[ $? -ne 0 ]] && die "Failure from gcloud edge-cloud container clusters" "$out"
+      [[ $? -ne 0 ]] && die "Failure from gcloud edge-cloud container clusters create command" "$out"
 
 
     fi
@@ -451,14 +578,14 @@ steps:
           --location=$LOCATION \
           --maintenance-window-start=$MAINTENANCE_WINDOW_START \
           --maintenance-window-end=$MAINTENANCE_WINDOW_END \
-          --maintenance-window-recurrence=$MAINTENANCE_WINDOW_RECURRENCE)
+          --maintenance-window-recurrence=$MAINTENANCE_WINDOW_RECURRENCE 2>&1)
       [[ $? -ne 0 ]] && die "Maintenance window update failed" "$out"
     fi
 
     log_build_step "Initializing zone network"
     out=$(gcloud edge-cloud networking zones init $NODE_LOCATION \
       --project=$MACHINE_PROJECT_ID \
-      --location=$LOCATION)
+      --location=$LOCATION 2>&1)
 
     [[ $? -ne 0 ]] && die "Zone network failed to initialize" "$out"
 
@@ -466,9 +593,9 @@ steps:
     for vlan in $(echo $SUBNET_VLANS | csvtool transpose -); do
       EXISTING_VLAN=$(gcloud edge-cloud networking subnets list --location $LOCATION \
           --zone $NODE_LOCATION --project $MACHINE_PROJECT_ID \
-          --filter="VLANID=$vlan" --format="json")
+          --filter="VLANID=$vlan" --format="json" 2>&1)
 
-      [[ $? -ne 0 ]] && die "Unable to query for subnets"
+      [[ $? -ne 0 ]] && die "Unable to query for subnets" "$EXISTING_VLAN" 7
 
       if [ "$EXISTING_VLAN" = "[]" ]; then
         out=$(gcloud edge-cloud networking subnets create "network-$vlan" \
@@ -476,7 +603,7 @@ steps:
             --network=default \
             --location=$LOCATION \
             --zone=$NODE_LOCATION \
-            --project $MACHINE_PROJECT_ID)
+            --project $MACHINE_PROJECT_ID 2>&1)
         [[ $? -ne 0 ]] && die "Subnet creation failed" "$out"
       else
         echo ">>> [Cluster Create] VLAN $vlan already exists"
@@ -489,19 +616,19 @@ steps:
     set -x
     if [ -n "$LABELS" ]; then
       log_build_step "Adding fleet membership labels"
-      gcloud container fleet memberships update $CLUSTER_NAME --clear-labels --update-labels $LABELS
+      out=$(gcloud container fleet memberships update $CLUSTER_NAME --clear-labels --update-labels $LABELS 2>&1) || die "Failed to update fleet membership labels" "$out"
     fi
 
     export KUBECONFIG="$(pwd)/gateway-kubeconfig"
-    gcloud container fleet memberships get-credentials $CLUSTER_NAME --project $FLEET_PROJECT_ID
+    out=$(gcloud container fleet memberships get-credentials $CLUSTER_NAME --project $FLEET_PROJECT_ID 2>&1) || die "Failed to get cluster credentials" "$out" 7
 
-    gcloud storage cp gs://$CLUSTER_INTENT_BUCKET/apply-spec.yaml.template .
+    out=$(gcloud storage cp gs://$CLUSTER_INTENT_BUCKET/apply-spec.yaml.template . 2>&1) || die "Failed to copy apply-spec template from GCS" "$out"
 
     if [[ -n "$CS_VERSION" ]]; then
       export CS_VERSION_YAML="version: $CS_VERSION"
     fi
 
-    envsubst < apply-spec.yaml.template > apply-spec.yaml
+    out=$(envsubst < apply-spec.yaml.template > apply-spec.yaml 2>&1) || die "Failed to substitute environment variables in template" "$out"
     set +x
     log_build_step "Configuring configsync"
     gcloud secrets versions access latest --secret=$GIT_TOKEN_SECRETS_MANAGER_NAME \
@@ -511,38 +638,95 @@ steps:
     set +e # Temporarily disable errexit to safely capture PIPESTATUS
     trap - ERR # Prevent trap from hijacking pipe errors
 
-    kubectl create ns config-management-system --dry-run=client -o yaml | kubectl apply -f -
-    rcs=("${PIPESTATUS[@]}")
-    [[ ${rcs[0]} -ne 0 ]] && die "Failed to create namespace" "Command failed: kubectl create ns config-management-system --dry-run=client -o yaml (Exit code: ${rcs[0]})"
-    [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply namespace" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})"
+    out=$( (kubectl create ns config-management-system --dry-run=client -o yaml | kubectl apply -f -) 2>&1 ) || {
+      rc=$?
+      set +x
+      diag=$(kubectl get ns config-management-system -o yaml 2>/dev/null || echo "[DIAGNOSTIC_FAILED] Failed to get namespace status")
+      die "Failed to configure namespace" "$out (Exit code: $rc)" 2 "$diag"
+    }
 
     set +x
-    kubectl create secret generic git-creds --namespace="config-management-system" \
+    out=$( (kubectl create secret generic git-creds --namespace="config-management-system" \
         --from-literal=username=default --from-file=token="$(pwd)/git-creds" \
-        --dry-run=client -o yaml | kubectl apply -f -
-    rcs=("${PIPESTATUS[@]}")
+        --dry-run=client -o yaml | kubectl apply -f -) 2>&1 ) || {
+      rc=$?
+      set +x
+      diag=$(
+        kubectl get secret git-creds -n config-management-system -o json 2>/dev/null | jq '
+          {
+            name: .metadata.name,
+            type: .type,
+            created: .metadata.creationTimestamp,
+            data_keys: (.data | keys)
+          } // empty
+        ' || echo "[DIAGNOSTIC_FAILED] Failed to get secret status"
+      )
+      die "Failed to configure secret" "$out (Exit code: $rc)" 2 "$diag"
+    }
+
     set -x
-    [[ ${rcs[0]} -ne 0 ]] && die "Failed to create secret" "Command failed: kubectl create secret generic git-creds ... (Exit code: ${rcs[0]})"
-    [[ ${rcs[1]} -ne 0 ]] && die "Failed to apply secret" "Command failed: kubectl apply -f - (Exit code: ${rcs[1]})"
+    out=$(gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
+        --config=./apply-spec.yaml --project $FLEET_PROJECT_ID 2>&1)
+    rc=$?
+    set -e
+    if [[ $rc -ne 0 ]]; then
+      diag=$(
+        kubectl get rootsync root-sync -n config-management-system -o json 2>/dev/null | jq '
+          {
+            repo: .spec.git.repo,
+            dir: .spec.git.dir,
+            last_synced_commit: .status.lastSyncedCommit,
+            conditions: [.status.conditions[]? | {
+              type: .type,
+              status: .status,
+              message: .message
+            }],
+            render_errors: .status.rendering.errors,
+            sync_errors: .status.sync.errors
+          } // empty
+        ' || echo "[DIAGNOSTIC_FAILED] Failed to get RootSync status"
+      )
+      die "Config Sync apply failed" "$out" 2 "$diag"
+    fi
 
-    set -e # Restore errexit
-    trap 'die "Error configuring cluster" "Command that failed: $BASH_COMMAND"' ERR # Restore trap
-
-    gcloud beta container fleet config-management apply --membership=$CLUSTER_NAME \
-        --config=./apply-spec.yaml --project $FLEET_PROJECT_ID
-
-    gcloud storage cp gs://$CLUSTER_INTENT_BUCKET/fleet-packages-rbac.yaml.template .
-    export PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format="value(projectNumber)")
+    out=$(gcloud storage cp gs://$CLUSTER_INTENT_BUCKET/fleet-packages-rbac.yaml.template . 2>&1) || die "Failed to copy fleet packages RBAC template" "$out"
+    PROJECT_NUMBER_RESOLVED=$(gcloud projects describe $FLEET_PROJECT_ID --format="value(projectNumber)" 2>&1) || die "Failed to describe project" "$PROJECT_NUMBER_RESOLVED"
+    export PROJECT_NUMBER="$PROJECT_NUMBER_RESOLVED"
     
-    envsubst < fleet-packages-rbac.yaml.template > fleet-packages-rbac.yaml
+    out=$(envsubst < fleet-packages-rbac.yaml.template > fleet-packages-rbac.yaml 2>&1) || die "Failed to substitute environment variables in template" "$out"
 
-    kubectl apply -f fleet-packages-rbac.yaml
+    out=$(kubectl apply -f fleet-packages-rbac.yaml 2>&1) || {
+      set +x
+      diag=$(
+        kubectl get -f fleet-packages-rbac.yaml -o json 2>/dev/null | jq '
+          if (.items | length) == 0 then
+            "No RBAC resources found in the cluster"
+          else
+            .items[] | {
+              kind: .kind,
+              name: .metadata.name,
+              namespace: .metadata.namespace,
+              created: .metadata.creationTimestamp,
+              subjects: .subjects
+            }
+          end
+        ' || echo "[DIAGNOSTIC_FAILED] Failed to get fleet packages RBAC status"
+      )
+      die "Failed to apply fleet packages RBAC" "$out" 2 "$diag"
+    }
 
     # Apply old Group RBAC steps if cluster version is less than 1.10.0
     if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] &&  ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
       log_build_step "Configuring manual Group RBAC"
-      FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)')
-      kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}'
+      FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)' 2>&1) || die "Failed to describe project for Group RBAC" "$FLEET_PROJECT_NUMBER"
+      out=$(kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}' 2>&1) || {
+        diag=$(
+          kubectl get clientconfig default -n kube-public -o json 2>/dev/null | jq '
+            {authentication: .spec.authentication, status: .status} // empty
+          ' || echo "[DIAGNOSTIC_FAILED] Failed to get clientconfig status"
+        )
+        die "Failed to patch clientconfig for Group RBAC" "$out" 2 "$diag"
+      }
       log_build_step "Group RBAC applied"
     else
       log_build_step "Skipping manual Group RBAC setup"
@@ -554,6 +738,22 @@ steps:
     if [[ -z ${SKIP_HEALTH_CHECK} ]]; then
       # State flag for ConfigSync sequential checks
       config_sync_ok=true
+
+      # Check if we are using GKE Hub-managed ConfigSync (v1.21.0+) or legacy ConfigManagement (< v1.21.0)
+      is_modern_config_sync=true
+      if [[ -n "${CS_VERSION}" ]] && ! gdc_version_evaluate "${CS_VERSION}" "1.21.0"; then
+        is_modern_config_sync=false
+      fi
+
+      resource_kind="configsyncs.configdelivery.gke.io"
+      resource_name="config-sync"
+      err_jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
+
+      if [[ "$is_modern_config_sync" == "false" ]]; then
+        resource_kind="configmanagements.configmanagement.gke.io"
+        resource_name="config-management"
+        err_jsonpath='{.status.errors[0]}'
+      fi
 
       # Check 1: Check for ConfigSync CRD to be created (Non-blocking telemetry check)
       count=0
@@ -576,7 +776,7 @@ steps:
         max_retries_for_configsync_creation=60 # 5 min
         log_build_step "Waiting for ConfigSync custom resource to be created"
         while [[ ${count} -lt ${max_retries_for_configsync_creation} ]]; do
-          kubectl get configsyncs.configdelivery.gke.io config-sync >/dev/null 2>&1 && break
+          kubectl get ${resource_kind} ${resource_name} >/dev/null 2>&1 && break
           sleep 5
           ((count++))
         done
@@ -586,7 +786,7 @@ steps:
           log_build_step "[WARNING] ConfigSync custom resource not created after 5min. Proceeding to default health checks..."
         else
           # Retrieve Hub API Checkpoint (Start Time) from config-sync annotation
-          config_sync_json=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o json 2>/dev/null)
+          config_sync_json=$(kubectl get ${resource_kind} ${resource_name} -o json 2>/dev/null)
           creation_time=$(printf '%s\n' "$config_sync_json" | jq -r '.metadata.creationTimestamp // empty' 2>/dev/null)
           update_time=$(printf '%s\n' "$config_sync_json" | jq -r '.metadata.annotations["configmanagement.gke.io/update-time"] // empty' 2>/dev/null)
           log_build_step "ConfigSync custom resource detected (Created: ${creation_time:-unknown}, Hub API Start Time: ${update_time:-unknown})"
@@ -599,7 +799,7 @@ steps:
         max_retries_for_configsync_healthy=120 # 10 min
         log_build_step "Waiting for ConfigSync custom resource to be healthy"
         while [[ ${count} -lt ${max_retries_for_configsync_healthy} ]]; do
-          healthy=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o jsonpath='{.status.healthy}' 2>/dev/null)
+          healthy=$(kubectl get ${resource_kind} ${resource_name} -o jsonpath='{.status.healthy}' 2>/dev/null)
           if [[ "$healthy" == "true" ]]; then
             log_build_step "ConfigSync custom resource is healthy"
             break
@@ -609,13 +809,13 @@ steps:
         done
         if [[ ${count} -ge ${max_retries_for_configsync_healthy} ]]; then
           # Extract concise, single-line error messages for HWM telemetry
-          config_sync_err=$(kubectl get configsyncs.configdelivery.gke.io config-sync -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)
+          config_sync_err=$(kubectl get ${resource_kind} ${resource_name} -o jsonpath="${err_jsonpath}" 2>/dev/null)
           root_sync_err=$(kubectl get rootsyncs.configsync.gke.io -n config-management-system root-sync -o jsonpath='{.status.conditions[?(@.status=="True")].message}' 2>/dev/null)
 
           log_build_step "[WARNING] ConfigSync not healthy. Reason: ${config_sync_err:-unknown}. RootSync Error: ${root_sync_err:-none}. Proceeding to default health checks..."
           
           # Dump detailed reports to console for human debugging
-          kubectl describe configsyncs.configdelivery.gke.io config-sync 2>/dev/null
+          kubectl describe ${resource_kind} ${resource_name} 2>/dev/null
           kubectl describe rootsyncs.configsync.gke.io -n config-management-system root-sync 2>/dev/null
         fi
       fi
@@ -625,16 +825,29 @@ steps:
       log_build_step "Waiting for health check resource to be created"
       while [[ ${count} -lt ${max_retries_for_healthcheck_creation} ]]; do
         kubectl get healthchecks.validator.gdc.gke.io/default >/dev/null 2>&1 && break
-        echo -n .
         sleep 5
         ((count++))
       done
-      [[ ${count} -ge ${max_retries_for_healthcheck_creation} ]] && die "Health check resource not created after 20min"
+      if [[ ${count} -ge ${max_retries_for_healthcheck_creation} ]]; then
+        diag=$(
+          kubectl get crd healthchecks.validator.gdc.gke.io -o json 2>/dev/null | jq '
+            {
+              name: .metadata.name,
+              conditions: [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}]
+            } // empty
+          ' || echo "[DIAGNOSTIC_FAILED] CRD not found"
+        )
+        die "Health check resource not created after 20min" "Timeout waiting for resource creation" 4 "$diag"
+      fi
 
       log_build_step "Waiting for platform healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy --timeout=1h; then
-        kubectl describe healthchecks.validator.gdc.gke.io/default
-        die "Platform is not healthy after 1h. Please review the failed platform health checks."
+        diag=$(
+          kubectl get healthchecks.validator.gdc.gke.io/default -o json 2>/dev/null | jq '
+            [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}] // empty
+          ' || echo "Failed to get healthcheck status"
+        )
+        die "Platform is not healthy after 1h" "Timeout waiting for condition=PlatformHealthy" 4 "$diag"
       fi
 
       # Calculate workload timeout by removing non-workload related buffer time from the over build timeout.
@@ -644,8 +857,12 @@ steps:
 
       log_build_step "Waiting for workload healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy --timeout="${WORKLOAD_TIMEOUT}s"; then
-        kubectl describe healthchecks.validator.gdc.gke.io/default
-        die "[CUSTOMER_ERROR] Workloads are not healthy after ${WORKLOAD_TIMEOUT}s. Please review the failed workload health checks."
+        diag=$(
+          kubectl get healthchecks.validator.gdc.gke.io/default -o json 2>/dev/null | jq '
+            [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}] // empty
+          ' || echo "Failed to get healthcheck status"
+        )
+        die "[CUSTOMER_ERROR] Workloads are not healthy after ${WORKLOAD_TIMEOUT}s" "Timeout waiting for condition=WorkloadsHealthy" 4 "$diag"
       fi
     fi
     
@@ -660,10 +877,31 @@ steps:
     sleep 30m
 
     log_build_step "Shutting down running VMs"
-    for vm in $(kubectl get vmi -n vm-workloads --no-headers | awk '{print $1}'); do
+    vms=$(kubectl get vmi -n vm-workloads --no-headers | awk '{print $1}')
+    fail=0
+    for vm in $vms; do
       echo ">>> [Cluster Create] Shutting down $vm"
-      ./virtctl stop -n vm-workloads $vm
+      ./virtctl stop -n vm-workloads $vm || { echo ">>> [Cluster Create] Failed to stop $vm"; fail=1; }
     done
+    if [[ $fail -ne 0 ]]; then
+      diag=$(
+        kubectl get vmi -n vm-workloads -o json 2>/dev/null | jq '
+          if (.items | length) == 0 then
+            "No running VMs found in namespace vm-workloads"
+          else
+            .items[] | {
+              name: .metadata.name,
+              node: .status.nodeName,
+              phase: .status.phase,
+              terminating_since: .metadata.deletionTimestamp,
+              conditions: [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}],
+              migration: (if .status.migrationState then (.status.migrationState | {source: .sourceNode, target: .targetNode, status: .status, error: .abortReason}) else null end)
+            }
+          end
+        ' || echo "[DIAGNOSTIC_FAILED] Failed to get VMI status"
+      )
+      die "Unsuccessful VM termination sequence" "Failed to stop all VMs" 2 "$diag"
+    fi
 
     set +eE
     trap - ERR
