@@ -157,7 +157,7 @@ variable "hardware_management_api_endpoint_override" {
 }
 
 variable "cluster_creation_timeout" {
-  description = "Cloud Build timeout in seconds for cluster creation. This should account for time to create the cluster, configure core services (ConfigSync, Robin, VMRuntime, etc..), and time for any workload configuration needed before the healthchecks pass."
+  description = "Cloud Build timeout in seconds for cluster creation. This should account for time to create the cluster, configure core services (ConfigSync, Robin, VMRuntime, etc..), and time for any workload configuration needed before the healthchecks pass. This value must be greater than platform_healthcheck_timeout_seconds + 6600 seconds (1.8 hours) to ensure a non-negative workload healthcheck timeout."
   default     = "28800"
   type        = number
 }
@@ -165,6 +165,12 @@ variable "cluster_creation_timeout" {
 variable "cluster_creation_max_retries" {
   description = "The maximum number of retries upon cluster creation failure before marking the zone state as CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED"
   default     = "0"
+  type        = number
+}
+
+variable "platform_healthcheck_timeout_seconds" {
+  description = "Timeout in seconds for platform healthcheck. Defaults to 3600 (1h)."
+  default     = 3600
   type        = number
 }
 
