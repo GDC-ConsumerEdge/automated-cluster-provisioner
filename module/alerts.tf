@@ -253,3 +253,71 @@ resource "google_monitoring_alert_policy" "config-validation-failed-alert" {
     mime_type = "text/markdown"
   }
 }
+
+resource "google_monitoring_metric_descriptor" "gdc-api-connectivity-descriptor" {
+  description  = "GDC API Connectivity Health Status"
+  display_name = "GDC API Connectivity"
+  type         = "custom.googleapis.com/gdc_api_connectivity"
+  metric_kind  = "GAUGE"
+  value_type   = "INT64"
+  unit         = "1"
+
+  labels {
+    key         = "api"
+    value_type  = "STRING"
+    description = "The API name (e.g. hwm or edgecontainer)"
+  }
+  labels {
+    key         = "project_type"
+    value_type  = "STRING"
+    description = "The target project type (fleet_project or machine_project)"
+  }
+  labels {
+    key         = "target_project_id"
+    value_type  = "STRING"
+    description = "The target project ID"
+  }
+  labels {
+    key         = "location"
+    value_type  = "STRING"
+    description = "The target GCP location"
+  }
+  labels {
+    key         = "failure_reason"
+    value_type  = "STRING"
+    description = "The connection failure reason string"
+  }
+}
+
+resource "google_monitoring_alert_policy" "gdc-api-connectivity-alert" {
+  depends_on = [ google_monitoring_metric_descriptor.gdc-api-connectivity-descriptor ]
+  display_name = "GDC API Connectivity Failure Alert"
+  notification_channels = [google_monitoring_notification_channel.cp_notification_channel.name]
+  combiner = "OR"
+
+  conditions {
+    display_name = "GDC API Connectivity Status is failing (status=0)"
+    condition_threshold {
+      filter     = "metric.type = \"custom.googleapis.com/gdc_api_connectivity\" AND resource.type = \"global\""
+      comparison = "COMPARISON_LT"
+      threshold_value = 1
+      duration   = "1500s" # 25 minutes of continuous failure (at least 2 consecutive runs)
+      
+      trigger {
+        count = 1
+      }
+
+      aggregations {
+        alignment_period   = "1200s"
+        per_series_aligner = "ALIGN_MIN" # If any point is 0 in the period, keep the min (0)
+        cross_series_reducer = "REDUCE_NONE"
+        group_by_fields     = ["metric.label.api", "metric.label.target_project_id", "metric.label.project_type", "metric.label.failure_reason"]
+      }
+    }
+  }
+
+  documentation {
+    content   = "The Cloud Function failed to connect to a GDC Edge API. \n\n**API**: $${metric.label.api}\n**Project Type**: $${metric.label.project_type}\n**Project ID**: $${metric.label.target_project_id}\n**Failure Reason**: $${metric.label.failure_reason}\n\nThis metric has a value of 0, representing a connection failure. Please check the Cloud Function logs and verify credentials, API status, and network routing."
+    mime_type = "text/markdown"
+  }
+}

@@ -77,6 +77,7 @@ class TestMain(unittest.TestCase):
         location = "test-location"
 
         params = mock.MagicMock()
+        params.project_id = "test-host-project"
         params.cloud_build_trigger = "test-trigger"
 
         class MockStore:
@@ -163,3 +164,200 @@ project1,1.11.0
         result = main.read_intent_data(params, 'fleet_project_id')
         
         self.assertEqual(result.get(('project1', 'us-central1')), {})
+
+    def test_get_failure_reason(self):
+        self.assertEqual(main._get_failure_reason(main.exceptions.PermissionDenied("error")), "permission_denied")
+        self.assertEqual(main._get_failure_reason(main.exceptions.Unauthenticated("error")), "permission_denied")
+        self.assertEqual(main._get_failure_reason(main.exceptions.InvalidArgument("error")), "invalid_argument")
+        self.assertEqual(main._get_failure_reason(main.exceptions.NotFound("error")), "not_found")
+        self.assertEqual(main._get_failure_reason(main.exceptions.ResourceExhausted("error")), "quota_exceeded")
+        self.assertEqual(main._get_failure_reason(Exception("generic")), "unreachable")
+
+    @mock.patch('src.main.clients.get_monitoring_client')
+    def test_report_api_connectivity_metric_success(self, mock_get_monitoring_client):
+        mock_m_client = mock.MagicMock()
+        mock_get_monitoring_client.return_value = mock_m_client
+
+        params = mock.MagicMock()
+        params.project_id = "test-host-project"
+
+        main.report_api_connectivity_metric(
+            host_project_id="test-host-project",
+            api="hwm",
+            project_type="machine_project",
+            project_id="mach-proj",
+            location="us-central1",
+            status=1,
+            failure_reason=""
+        )
+
+        mock_m_client.create_time_series.assert_called_once()
+        args, _ = mock_m_client.create_time_series.call_args
+        request = args[0]
+
+        self.assertEqual(request.name, "projects/test-host-project")
+        self.assertEqual(len(request.time_series), 1)
+        ts = request.time_series[0]
+        self.assertEqual(ts.metric.type, "custom.googleapis.com/gdc_api_connectivity")
+        self.assertEqual(ts.metric.labels["api"], "hwm")
+        self.assertEqual(ts.metric.labels["project_type"], "machine_project")
+        self.assertEqual(ts.metric.labels["target_project_id"], "mach-proj")
+        self.assertEqual(ts.metric.labels["location"], "us-central1")
+        self.assertEqual(ts.metric.labels["failure_reason"], "")
+        self.assertEqual(ts.resource.type, "global")
+        self.assertEqual(ts.resource.labels["project_id"], "test-host-project")
+        self.assertEqual(ts.points[0].value.int64_value, 1)
+
+    @mock.patch('src.main.report_api_connectivity_metric')
+    @mock.patch('src.main.get_zones')
+    @mock.patch('src.main.clients.get_cloudbuild_client')
+    def test_zone_watcher_worker_reports_hwm_connectivity_success(
+        self, mock_get_cb, mock_get_zones, mock_report
+    ):
+        mock_get_zones.return_value = {}
+        params = mock.MagicMock()
+        params.project_id = "test-host-project"
+        builds = mock.MagicMock()
+
+        class MockStore:
+            fleet_project_id = "fleet-proj-1"
+            intent_hash = "hash-1"
+
+        stores = {"store1": MockStore()}
+
+        main._zone_watcher_worker(
+            machine_project="mach-proj",
+            location="us-central1",
+            stores=stores,
+            params=params,
+            builds=builds,
+            machine_lists={},
+            unprocessed_zones={},
+            unprocessed_zones_lock=mock.MagicMock(),
+        )
+
+        mock_report.assert_called_once_with(
+            host_project_id="test-host-project",
+            api="hwm",
+            project_type="machine_project",
+            project_id="mach-proj",
+            location="us-central1",
+            status=1,
+            failure_reason=""
+        )
+
+    @mock.patch('src.main.report_api_connectivity_metric')
+    @mock.patch('src.main.get_zones')
+    @mock.patch('src.main.clients.get_cloudbuild_client')
+    def test_zone_watcher_worker_reports_hwm_connectivity_failure(
+        self, mock_get_cb, mock_get_zones, mock_report
+    ):
+        mock_get_zones.side_effect = Exception("HWM API Connection Failed")
+        params = mock.MagicMock()
+        params.project_id = "test-host-project"
+        builds = mock.MagicMock()
+
+        class MockStore:
+            fleet_project_id = "fleet-proj-1"
+            intent_hash = "hash-1"
+
+        stores = {"store1": MockStore()}
+
+        result = main._zone_watcher_worker(
+            machine_project="mach-proj",
+            location="us-central1",
+            stores=stores,
+            params=params,
+            builds=builds,
+            machine_lists={},
+            unprocessed_zones={},
+            unprocessed_zones_lock=mock.MagicMock(),
+        )
+
+        self.assertEqual(result, 0)
+        mock_report.assert_called_once_with(
+            host_project_id="test-host-project",
+            api="hwm",
+            project_type="machine_project",
+            project_id="mach-proj",
+            location="us-central1",
+            status=0,
+            failure_reason="unreachable"
+        )
+
+    @mock.patch('src.main.report_api_connectivity_metric')
+    @mock.patch('src.main.get_memberships')
+    @mock.patch('src.main.get_zones')
+    @mock.patch('src.main.clients.get_edgecontainer_client')
+    @mock.patch('src.main.clients.get_cloudbuild_client')
+    def test_cluster_watcher_worker_reports_metrics_success(
+        self, mock_get_cb, mock_get_ec, mock_get_zones, mock_get_memberships, mock_report
+    ):
+        mock_get_memberships.return_value = {}
+        mock_get_zones.return_value = {}
+        
+        mock_ec_client = mock.MagicMock()
+        mock_get_ec.return_value = mock_ec_client
+        mock_ec_client.list_clusters.return_value = []
+        mock_ec_client.common_location_path.return_value = "path"
+
+        class MockStore:
+            fleet_project_id = "fleet-proj-1"
+            machine_project_id = "mach-proj-1"
+            location = "us-central1"
+
+        stores = {"store1": MockStore()}
+        params = mock.MagicMock()
+        params.project_id = "test-host-project"
+
+        main._cluster_watcher_worker("fleet-proj-1", "us-central1", stores, params)
+
+        # Assert report call for edgecontainer connectivity status=1 (HWM is not reported by cluster_watcher)
+        mock_report.assert_called_once_with(
+            host_project_id="test-host-project",
+            api="edgecontainer",
+            project_type="fleet_project",
+            project_id="fleet-proj-1",
+            location="us-central1",
+            status=1,
+            failure_reason=""
+        )
+
+    @mock.patch('src.main.report_api_connectivity_metric')
+    @mock.patch('src.main.get_memberships')
+    @mock.patch('src.main.get_zones')
+    @mock.patch('src.main.clients.get_edgecontainer_client')
+    @mock.patch('src.main.clients.get_cloudbuild_client')
+    def test_cluster_watcher_worker_reports_metrics_failure(
+        self, mock_get_cb, mock_get_ec, mock_get_zones, mock_get_memberships, mock_report
+    ):
+        mock_get_memberships.return_value = {}
+        mock_get_zones.return_value = {}
+        
+        mock_ec_client = mock.MagicMock()
+        mock_get_ec.return_value = mock_ec_client
+        # Edgecontainer API fails
+        mock_ec_client.list_clusters.side_effect = Exception("EdgeContainer API down")
+        mock_ec_client.common_location_path.return_value = "path"
+
+        class MockStore:
+            fleet_project_id = "fleet-proj-1"
+            machine_project_id = "mach-proj-1"
+            location = "us-central1"
+
+        stores = {"store1": MockStore()}
+        params = mock.MagicMock()
+        params.project_id = "test-host-project"
+
+        main._cluster_watcher_worker("fleet-proj-1", "us-central1", stores, params)
+
+        # Assert report call for edgecontainer status=0
+        mock_report.assert_called_once_with(
+            host_project_id="test-host-project",
+            api="edgecontainer",
+            project_type="fleet_project",
+            project_id="fleet-proj-1",
+            location="us-central1",
+            status=0,
+            failure_reason="unreachable"
+        )
