@@ -846,20 +846,27 @@ steps:
         die "Health check resource not created after 20min" "Timeout waiting for resource creation" 4 "$diag"
       fi
 
-      log_build_step "Waiting for platform healthchecks to pass"
-      if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy --timeout=1h; then
+      PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS="${PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS:-3600}"
+      log_build_step "Waiting for platform healthchecks to pass (Timeout: ${PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS}s)"
+      if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=PlatformHealthy --timeout="${PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS}s"; then
         diag=$(
           kubectl get healthchecks.validator.gdc.gke.io/default -o json 2>/dev/null | jq '
             [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}] // empty
           ' || echo "Failed to get healthcheck status"
         )
-        die "Platform is not healthy after 1h" "Timeout waiting for condition=PlatformHealthy" 4 "$diag"
+        die "Platform is not healthy after ${PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS}s" "Timeout waiting for condition=PlatformHealthy" 4 "$diag"
       fi
 
-      # Calculate workload timeout by removing non-workload related buffer time from the over build timeout.
-      # ($TIMEOUT_IN_SECONDS) - (1h for platform health) - (1h for cluster health)
+      # Calculate workload timeout by removing non-workload related buffer time from the overall build timeout.
+      # ($TIMEOUT_IN_SECONDS) - (platform health timeout) - (1h for cluster health)
       #                       - (10m for extra buffer) - (30m for vm wait)
-      WORKLOAD_TIMEOUT="$(($TIMEOUT_IN_SECONDS-"9600"))"
+      WORKLOAD_TIMEOUT=$(( TIMEOUT_IN_SECONDS - PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS - 6000 ))
+
+      # Ensure WORKLOAD_TIMEOUT is positive with a minimum floor of 10 minutes (600 seconds)
+      if [[ ${WORKLOAD_TIMEOUT} -lt 600 ]]; then
+        log_build_step "[WARNING] Calculated workload timeout (${WORKLOAD_TIMEOUT}s) is too low. Enforcing floor of 600s."
+        WORKLOAD_TIMEOUT=600
+      fi
 
       log_build_step "Waiting for workload healthchecks to pass"
       if ! kubectl wait healthchecks.validator.gdc.gke.io/default --for condition=WorkloadsHealthy --timeout="${WORKLOAD_TIMEOUT}s"; then
@@ -944,6 +951,7 @@ steps:
   - 'SKIP_HEALTH_CHECK=$_SKIP_HEALTH_CHECK'
   - 'SKIP_IDENTITY_SERVICE=$_SKIP_IDENTITY_SERVICE'
   - 'TIMEOUT_IN_SECONDS=$_TIMEOUT_IN_SECONDS'
+  - 'PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS=$_PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS'
   - 'STORE_ID=$_STORE_ID'
   - 'ZONE=$_ZONE'
   - 'CS_VERSION=$_CS_VERSION'
