@@ -326,7 +326,13 @@ steps:
       input="$1"
       column="$2"
 
-      output=$(echo "$input" | csvtool namedcol "$column" - | csvtool drop 1 - | tr -d '"')
+      local raw_col
+      if ! raw_col=$(echo "$input" | csvtool namedcol "$column" - 2>/dev/null); then
+        echo ">>> [Config] [WARNING] Optional column '$column' not found in CSV intent. Skipping." >&2
+        return 0
+      fi
+
+      output=$(echo "$raw_col" | csvtool drop 1 - | tr -d '"')
 
       echo "$output"
     }
