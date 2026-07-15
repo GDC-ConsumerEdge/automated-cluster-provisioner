@@ -138,7 +138,7 @@ steps:
       [[ -z "${zone_store_path}" ]] && { echo ">>> [Zone Signal] zone_store_path not provided"; return ; }
 
       if [[ "$UNDER_FACTORY_CHECKS" == "FALSE" ]]; then
-        echo ">>> [Zone Signal] Aborted: UNDER_FACTORY_CHECKS is FALSE"
+        echo ">>> [Zone Signal] Skipped: UNDER_FACTORY_CHECKS is FALSE"
         return;
       fi
 
