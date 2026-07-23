@@ -80,7 +80,7 @@ steps:
       message=">>> [Build Step] [Build: ${BUILD_ID}] $*"
       echo "$message"
 
-      zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_STARTED "$message"
+      zone_signal "$ZONE_ID" FACTORY_TURNUP_CHECKS_STARTED "$message" || true
     )
 
     # Sets the `UNDER_FACTORY_CHECKS` to either true if ZoneState is ready, started, or failed
@@ -294,7 +294,7 @@ steps:
         
         [[ "${is_completed}" != "false" ]] && break
         sleep 5
-        ((signal_attempts++))
+        ((++signal_attempts))
       done
       
       if [[ ${signal_attempts} -ge ${max_retries_for_signal_completion} ]]; then
