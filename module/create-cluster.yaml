@@ -104,7 +104,7 @@ steps:
       set -x
 
       if [[ $curl_status -ne 0 ]]; then
-        die "Failed to query the zone state" "$out" 14
+        die "Failed to query the zone state" "$zone_response" 14
       fi
 
       local zone_state=$(printf '%s\n' "$zone_response" | jq -r '.state // empty' 2>/dev/null)
@@ -602,7 +602,7 @@ steps:
     for vlan in $(echo $SUBNET_VLANS | csvtool transpose -); do
       EXISTING_VLAN=$(gcloud edge-cloud networking subnets list --location $LOCATION \
           --zone $NODE_LOCATION --project $MACHINE_PROJECT_ID \
-          --filter="VLANID=$vlan" --format="json" 2>&1)
+          --filter="VLANID=$vlan" --format="json")
 
       [[ $? -ne 0 ]] && die "Unable to query for subnets" "$EXISTING_VLAN" 7
 
@@ -699,7 +699,7 @@ steps:
     fi
 
     out=$(gcloud storage cp gs://$CLUSTER_INTENT_BUCKET/fleet-packages-rbac.yaml.template . 2>&1) || die "Failed to copy fleet packages RBAC template" "$out"
-    PROJECT_NUMBER_RESOLVED=$(gcloud projects describe $FLEET_PROJECT_ID --format="value(projectNumber)" 2>&1) || die "Failed to describe project" "$PROJECT_NUMBER_RESOLVED"
+    PROJECT_NUMBER_RESOLVED=$(gcloud projects describe $FLEET_PROJECT_ID --format="value(projectNumber)") || die "Failed to describe project" "$PROJECT_NUMBER_RESOLVED"
     export PROJECT_NUMBER="$PROJECT_NUMBER_RESOLVED"
     
     out=$(envsubst < fleet-packages-rbac.yaml.template > fleet-packages-rbac.yaml 2>&1) || die "Failed to substitute environment variables in template" "$out"
@@ -727,7 +727,7 @@ steps:
     # Apply old Group RBAC steps if cluster version is less than 1.10.0
     if [[ "${SKIP_IDENTITY_SERVICE}" == "FALSE" ]] &&  ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.10.0"; then
       log_build_step "Configuring manual Group RBAC"
-      FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)' 2>&1) || die "Failed to describe project for Group RBAC" "$FLEET_PROJECT_NUMBER"
+      FLEET_PROJECT_NUMBER=$(gcloud projects describe $FLEET_PROJECT_ID --format='value(projectNumber)') || die "Failed to describe project for Group RBAC" "$FLEET_PROJECT_NUMBER"
       out=$(kubectl patch clientconfig default -n kube-public --type=merge -p '{"spec":{"authentication":[{"google":{"audiences":["//'${GKEHUB_API_ENDPOINT}'/projects/'${FLEET_PROJECT_NUMBER}'/locations/global/memberships/'${CLUSTER_NAME}'"]},"name":"google-authentication-method"}]}}' 2>&1) || {
         diag=$(
           kubectl get clientconfig default -n kube-public -o json 2>/dev/null | jq '
