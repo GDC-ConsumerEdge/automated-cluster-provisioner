@@ -560,6 +560,7 @@ steps:
         --release-channel=NONE
         --version "$CLUSTER_VERSION"
         --offline-reboot-ttl=7d
+        --default-max-pods-per-node=250
       )
       [[ -n "${IDENTITY_SERVICE_ARG}" ]] && CMD_ARGS+=("${IDENTITY_SERVICE_ARG}")
       [[ -n "${ROBIN_CNS_ARG}" ]] && CMD_ARGS+=("${ROBIN_CNS_ARG}")
