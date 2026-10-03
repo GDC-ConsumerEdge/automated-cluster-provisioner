@@ -513,13 +513,36 @@ steps:
 
     log_build_step "Beginning provisioning"
   
+    # A previous build can die while the server-side create operation keeps running,
+    # leaving the cluster in PROVISIONING. Wait out any in-flight operation before
+    # deciding whether to create.
+    CLUSTER_WAIT_TIMEOUT_SECONDS=7200
+    CLUSTER_WAIT_POLL_SECONDS=30
+    CLUSTER_STATUS=""
+
+    CLUSTER_WAIT_DEADLINE=$(( SECONDS + CLUSTER_WAIT_TIMEOUT_SECONDS ))
+    while (( SECONDS < CLUSTER_WAIT_DEADLINE )); do
+      CLUSTER_STATUS=$(gcloud edge-cloud container clusters describe "$CLUSTER_NAME" \
+          --location "$LOCATION" --project "$FLEET_PROJECT_ID" \
+          --format="value(status)" --verbosity none)
+      [[ "$CLUSTER_STATUS" == "PROVISIONING" || "$CLUSTER_STATUS" == "RECONCILING" ]] || break
+      echo ">>> [Cluster State] ${CLUSTER_NAME} is ${CLUSTER_STATUS}, $(( CLUSTER_WAIT_DEADLINE - SECONDS ))s remaining..."
+      sleep "$CLUSTER_WAIT_POLL_SECONDS"
+    done
+
     set -x
 
-    gcloud edge-cloud container clusters describe $CLUSTER_NAME --location $LOCATION \
-        --project $FLEET_PROJECT_ID --verbosity none
-
-    if [ $? -eq 0 ]; then
-      log_build_step "Cluster already created, skipping to next step."
+    if [ "$CLUSTER_STATUS" = "RUNNING" ]; then
+      log_build_step "Cluster already exists and is RUNNING, skipping to next step."
+    elif [[ "$CLUSTER_STATUS" == "PROVISIONING" || "$CLUSTER_STATUS" == "RECONCILING" ]]; then
+      # Exhausted the wait. Error code 4 is the timeout bucket, consistent with the
+      # platform and workload healthcheck timeouts.
+      die "Cluster ${CLUSTER_NAME} is still ${CLUSTER_STATUS} after ${CLUSTER_WAIT_TIMEOUT_SECONDS}s" \
+          "A server-side operation from an earlier build is still in flight. Not safe to run create or update commands." 4
+    elif [ -n "$CLUSTER_STATUS" ]; then
+      # DELETING / ERROR / STATUS_UNSPECIFIED, fallback to the generic failure code.
+      die "Cluster ${CLUSTER_NAME} is ${CLUSTER_STATUS}, not safe to continue" \
+          "Expected the cluster to be RUNNING or absent before provisioning steps run." 2
     else
       # Create a new FD to support stdout,stderr to console + saving to bash variable
       # This is used to output the opid before the operation has completed
@@ -565,32 +588,22 @@ steps:
       [[ -n "${IDENTITY_SERVICE_ARG}" ]] && CMD_ARGS+=("${IDENTITY_SERVICE_ARG}")
       [[ -n "${ROBIN_CNS_ARG}" ]] && CMD_ARGS+=("${ROBIN_CNS_ARG}")
 
+      if [[ -n "${MAINTENANCE_WINDOW_START}" && -n "${MAINTENANCE_WINDOW_END}" && -n "${MAINTENANCE_WINDOW_RECURRENCE}" ]]; then
+        CMD_ARGS+=(
+          --maintenance-window-start="$MAINTENANCE_WINDOW_START"
+          --maintenance-window-end="$MAINTENANCE_WINDOW_END"
+          --maintenance-window-recurrence="$MAINTENANCE_WINDOW_RECURRENCE"
+        )
+      fi
+
       out=$(
         $GCLOUD_CMD "${CMD_ARGS[@]}" 2>&1 | tee /dev/fd/5
       )
 
       [[ $? -ne 0 ]] && die "Failure from gcloud edge-cloud container clusters create command" "$out"
-
-
     fi
 
     set +x
-    if [[ -z "${MAINTENANCE_WINDOW_START}" || -z ${MAINTENANCE_WINDOW_END} || \
-            -z ${MAINTENANCE_WINDOW_RECURRENCE} ]]; then
-      log_build_step "All maintenance window fields are not set, skipping"
-      echo ">>> [Cluster Create] MAINTENANCE_WINDOW_START=${MAINTENANCE_WINDOW_START}"
-      echo ">>> [Cluster Create] MAINTENANCE_WINDOW_END=${MAINTENANCE_WINDOW_END}"
-      echo ">>> [Cluster Create] MAINTENANCE_WINDOW_RECURRENCE=${MAINTENANCE_WINDOW_RECURRENCE}"
-    else
-      log_build_step "Setting maintenance window"
-      out=$(gcloud edge-cloud container clusters update $CLUSTER_NAME \
-          --project=$FLEET_PROJECT_ID \
-          --location=$LOCATION \
-          --maintenance-window-start=$MAINTENANCE_WINDOW_START \
-          --maintenance-window-end=$MAINTENANCE_WINDOW_END \
-          --maintenance-window-recurrence=$MAINTENANCE_WINDOW_RECURRENCE 2>&1)
-      [[ $? -ne 0 ]] && die "Maintenance window update failed" "$out"
-    fi
 
     log_build_step "Initializing zone network"
     out=$(gcloud edge-cloud networking zones init $NODE_LOCATION \

@@ -142,7 +142,7 @@ class TestBuildHistory(unittest.TestCase):
         self.assertEqual(history.project_id, self.project_id)
         self.assertEqual(history.region, self.region)
         self.assertEqual(history.max_retries, self.max_retries)
-        self.assertEqual(history.trigger_name, self.trigger_name)
+        self.assertEqual(history.trigger_names, {self.trigger_name})
         self.assertIs(history.client, instance)
         self.assertIsNotNone(history.builds)
         MockCloudBuildClient.assert_called_once()
@@ -464,3 +464,93 @@ class TestBuildHistory(unittest.TestCase):
             history.should_retry_zone_build(None, "")
         with self.assertRaisesRegex(Exception, 'missing zone_name'):
             history.should_retry_zone_build("", "")
+
+    def _history_from_builds(self, MockCloudBuildClient, builds):
+        mock_client = MockCloudBuildClient.return_value
+        mock_trigger = MagicMock()
+        mock_trigger.name = self.trigger_name
+        mock_trigger.id = self.trigger_id
+        mock_client.list_build_triggers.return_value = [mock_trigger]
+        mock_client.list_builds.return_value = builds
+        return BuildHistory(self.project_id, self.region, self.max_retries,
+                            self.trigger_name)
+
+    def test_has_active_build_for_in_flight_statuses(self, MockCloudBuildClient):
+        for status in (Status.WORKING, Status.QUEUED, Status.PENDING):
+            with self.subTest(status=status.name):
+                build = create_mock_build(
+                    "b1", status, {"_ZONE": "zone-a", "_STORE_ID": "store-1"})
+                history = self._history_from_builds(MockCloudBuildClient, [build])
+                self.assertTrue(history.has_active_build("store-1"))
+
+    def test_has_active_build_false_for_settled_statuses(self, MockCloudBuildClient):
+        for status in (Status.SUCCESS, Status.FAILURE, Status.TIMEOUT,
+                       Status.CANCELLED, Status.INTERNAL_ERROR):
+            with self.subTest(status=status.name):
+                build = create_mock_build(
+                    "b1", status, {"_ZONE": "zone-a", "_STORE_ID": "store-1"})
+                history = self._history_from_builds(MockCloudBuildClient, [build])
+                self.assertFalse(history.has_active_build("store-1"))
+
+    def test_has_active_build_when_zone_substitution_missing(self, MockCloudBuildClient):
+        """A build without _ZONE is skipped for retry accounting, but it is still running.
+        Treating it as inactive would let a modify build race it."""
+        build = create_mock_build("b1", Status.WORKING, {"_STORE_ID": "store-1"})
+        history = self._history_from_builds(MockCloudBuildClient, [build])
+
+        self.assertTrue(history.has_active_build("store-1"))
+        self.assertEqual(history.builds, {})
+
+    def test_has_active_build_ignores_builds_without_store_id(self, MockCloudBuildClient):
+        build = create_mock_build("b1", Status.WORKING, {"_ZONE": "zone-a"})
+        history = self._history_from_builds(MockCloudBuildClient, [build])
+
+        self.assertEqual(history.active_stores, set())
+        self.assertFalse(history.has_active_build("store-1"))
+
+    def test_has_active_build_only_matches_the_requested_store(self, MockCloudBuildClient):
+        build = create_mock_build(
+            "b1", Status.WORKING, {"_ZONE": "zone-a", "_STORE_ID": "store-1"})
+        history = self._history_from_builds(MockCloudBuildClient, [build])
+
+        self.assertFalse(history.has_active_build("store-2"))
+
+    def test_trigger_names_accepts_a_list(self, MockCloudBuildClient):
+        """The cluster watcher passes both the modify and create triggers so an
+        in-flight create-cluster build is visible to has_active_build()."""
+        mock_client = MockCloudBuildClient.return_value
+        modify = MagicMock(); modify.name = "modify-trigger"; modify.id = "id-modify"
+        create = MagicMock(); create.name = "create-trigger"; create.id = "id-create"
+        unrelated = MagicMock(); unrelated.name = "unrelated"; unrelated.id = "id-other"
+        mock_client.list_build_triggers.return_value = [modify, create, unrelated]
+        mock_client.list_builds.return_value = []
+
+        history = BuildHistory(self.project_id, self.region, self.max_retries,
+                               ["modify-trigger", "create-trigger"])
+
+        self.assertEqual(history.trigger_names, {"modify-trigger", "create-trigger"})
+        build_filter = mock_client.list_builds.call_args.kwargs["request"].filter
+        self.assertIn("trigger_id=id-modify", build_filter)
+        self.assertIn("trigger_id=id-create", build_filter)
+        self.assertNotIn("id-other", build_filter)
+
+    def test_trigger_names_partial_miss_still_loads_history(self, MockCloudBuildClient):
+        mock_client = MockCloudBuildClient.return_value
+        modify = MagicMock(); modify.name = "modify-trigger"; modify.id = "id-modify"
+        mock_client.list_build_triggers.return_value = [modify]
+        mock_client.list_builds.return_value = []
+
+        BuildHistory(self.project_id, self.region, self.max_retries,
+                     ["modify-trigger", "create-trigger"])
+
+        build_filter = mock_client.list_builds.call_args.kwargs["request"].filter
+        self.assertEqual(build_filter, "trigger_id=id-modify")
+
+    def test_trigger_names_total_miss_raises(self, MockCloudBuildClient):
+        mock_client = MockCloudBuildClient.return_value
+        unrelated = MagicMock(); unrelated.name = "unrelated"; unrelated.id = "id-other"
+        mock_client.list_build_triggers.return_value = [unrelated]
+
+        with self.assertRaises(Exception):
+            BuildHistory(self.project_id, self.region, self.max_retries,
+                         ["modify-trigger", "create-trigger"])

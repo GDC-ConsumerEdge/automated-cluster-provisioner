@@ -239,7 +239,9 @@ def zone_watcher(req: flask.Request):
     config_zone_info = read_intent_data(params, 'machine_project_id')
     
     ec_client = clients.get_edgecontainer_client()
-    builds = BuildHistory(params.project_id, params.region, params.max_retries, params.cloud_build_trigger_name)
+    builds = BuildHistory(params.project_id, params.region, params.max_retries,
+                          params.cloud_build_trigger_name,
+                          client=clients.get_cloudbuild_client())
 
     machine_lists: Dict[str, list[edgecontainer.Machine]] = {}
     unprocessed_zones: Dict[str, Tuple] = {}
@@ -308,6 +310,7 @@ def _cluster_watcher_worker(
     location: str,
     stores: Dict[str, SourceOfTruthModel],
     params: WatcherSettings,
+    builds: BuildHistory,
 ) -> int:
     ec_client = clients.get_edgecontainer_client()
     en_client = clients.get_edgenetwork_client()
@@ -383,6 +386,26 @@ def _cluster_watcher_worker(
         logger.debug(zone_cluster_list)
 
         cluster = zone_cluster_list[0]
+
+        # Only reconcile if there are no active builds in-flight for this store.
+        # This prevents triggering a modify build while create-cluster or another modify
+        # build is still running.
+        if builds.has_active_build(store_id):
+            logger.info(
+                f'Store {store_id} has an active Cloud Build in progress, skipping update check'
+            )
+            continue
+
+        # Only reconcile settled clusters. Triggering a modify build against a cluster
+        # that is PROVISIONING, RECONCILING or DELETING produces update calls the API
+        # rejects, and burns a build for nothing.
+        if cluster.status != edgecontainer.Cluster.Status.RUNNING:
+            logger.info(
+                f'Cluster {cluster.name} in zone {zone} is '
+                f'{edgecontainer.Cluster.Status(cluster.status).name}, skipping update check'
+            )
+            continue
+
         rw = cluster.maintenance_policy.window.recurring_window
         has_update = False
 
@@ -488,10 +511,25 @@ def cluster_watcher(req: flask.Request):
     config_zone_info = read_intent_data(params, 'fleet_project_id')
     count = 0
 
+    # Built once per invocation and shared across workers, mirroring zone_watcher.
+    trigger_names = [params.cloud_build_trigger_name]
+    if params.create_cloud_build_trigger_name:
+        trigger_names.append(params.create_cloud_build_trigger_name)
+    try:
+        builds = BuildHistory(params.project_id, params.region, params.max_retries,
+                              trigger_names, client=clients.get_cloudbuild_client())
+    except Exception:
+        # Fail closed: without build history we cannot tell whether a create or modify
+        # build is already in flight, and triggering one anyway is what this guards against.
+        logger.exception(
+            'Unable to load Cloud Build history; skipping this pass to avoid racing in-flight builds'
+        )
+        return 'total zones triggered = 0'
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=params.max_workers) as executor:
         futures = []
         for (project_id, location), stores in config_zone_info.items():
-            future = executor.submit(_cluster_watcher_worker, project_id, location, stores, params)
+            future = executor.submit(_cluster_watcher_worker, project_id, location, stores, params, builds)
             futures.append(future)
         
         for future in concurrent.futures.as_completed(futures):
