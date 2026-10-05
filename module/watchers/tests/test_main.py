@@ -95,7 +95,7 @@ class TestMain(unittest.TestCase):
         }
 
         # Act
-        main._cluster_watcher_worker(project_id, location, stores, params, mock.MagicMock())
+        main._cluster_watcher_worker(project_id, location, stores, params, set())
 
         # Assert
         mock_get_zones.assert_has_calls(
@@ -311,7 +311,7 @@ project1,1.11.0
         params = mock.MagicMock()
         params.project_id = "test-host-project"
 
-        main._cluster_watcher_worker("fleet-proj-1", "us-central1", stores, params, mock.MagicMock())
+        main._cluster_watcher_worker("fleet-proj-1", "us-central1", stores, params, set())
 
         # Assert report call for edgecontainer connectivity status=1 (HWM is not reported by cluster_watcher)
         mock_report.assert_called_once_with(
@@ -350,7 +350,7 @@ project1,1.11.0
         params = mock.MagicMock()
         params.project_id = "test-host-project"
 
-        main._cluster_watcher_worker("fleet-proj-1", "us-central1", stores, params, mock.MagicMock())
+        main._cluster_watcher_worker("fleet-proj-1", "us-central1", stores, params, set())
 
         # Assert report call for edgecontainer status=0
         mock_report.assert_called_once_with(
@@ -404,13 +404,6 @@ project1,1.11.0
         params.cloud_build_trigger = "projects/test-host-project/locations/us-central1/triggers/modify-trigger"
         return params
 
-    @staticmethod
-    def _cluster_watcher_builds(has_active_build):
-        """Stands in for the BuildHistory that cluster_watcher() now builds and injects."""
-        builds = mock.MagicMock()
-        builds.has_active_build.return_value = has_active_build
-        return builds
-
     @mock.patch('src.main.report_api_connectivity_metric')
     @mock.patch('src.main.get_memberships')
     @mock.patch('src.main.get_zones')
@@ -427,17 +420,15 @@ project1,1.11.0
         mock_cb_client = mock.MagicMock()
         mock_get_cb.return_value = mock_cb_client
 
-        builds = self._cluster_watcher_builds(has_active_build=True)
         self._cluster_watcher_mocks(mock_get_ec, edgecontainer.Cluster.Status.RUNNING)
 
-        params = self._cluster_watcher_params()
         triggered_count = main._cluster_watcher_worker(
-            "fleet-proj-1", "us-central1", self._cluster_watcher_store(), params, builds
+            "fleet-proj-1", "us-central1", self._cluster_watcher_store(),
+            self._cluster_watcher_params(), {"store1"}
         )
 
         self.assertEqual(triggered_count, 0)
         mock_cb_client.run_build_trigger.assert_not_called()
-        builds.has_active_build.assert_called_with("store1")
 
     @mock.patch('src.main.report_api_connectivity_metric')
     @mock.patch('src.main.get_memberships')
@@ -459,8 +450,7 @@ project1,1.11.0
 
         triggered_count = main._cluster_watcher_worker(
             "fleet-proj-1", "us-central1", self._cluster_watcher_store(),
-            self._cluster_watcher_params(),
-            self._cluster_watcher_builds(has_active_build=False)
+            self._cluster_watcher_params(), set()
         )
 
         self.assertEqual(triggered_count, 1)
@@ -494,8 +484,7 @@ project1,1.11.0
 
                 triggered_count = main._cluster_watcher_worker(
                     "fleet-proj-1", "us-central1", self._cluster_watcher_store(),
-                    self._cluster_watcher_params(),
-                    self._cluster_watcher_builds(has_active_build=False)
+                    self._cluster_watcher_params(), set()
                 )
 
                 self.assertEqual(triggered_count, 0)
@@ -503,10 +492,10 @@ project1,1.11.0
 
     @mock.patch('src.main.read_intent_data')
     @mock.patch('src.main.WatcherSettings')
-    @mock.patch('src.main.BuildHistory')
+    @mock.patch('src.main.get_active_build_stores')
     @mock.patch('src.main.clients.get_cloudbuild_client')
-    def test_cluster_watcher_scopes_history_to_both_triggers(
-        self, mock_get_cb, mock_build_history, mock_settings, mock_read_intent
+    def test_cluster_watcher_scopes_active_builds_to_both_triggers(
+        self, mock_get_cb, mock_get_active, mock_settings, mock_read_intent
     ):
         """Both triggers must be in scope, or an in-flight create-cluster is invisible
         to the reconciler and it will fire a modify on a half-built cluster."""
@@ -515,16 +504,16 @@ project1,1.11.0
 
         main.cluster_watcher(mock.MagicMock())
 
-        trigger_names = mock_build_history.call_args.args[3]
+        trigger_names = mock_get_active.call_args.args[3]
         self.assertIn("modify-trigger", trigger_names)
         self.assertIn("create-trigger", trigger_names)
 
     @mock.patch('src.main.read_intent_data')
     @mock.patch('src.main.WatcherSettings')
-    @mock.patch('src.main.BuildHistory')
+    @mock.patch('src.main.get_active_build_stores')
     @mock.patch('src.main.clients.get_cloudbuild_client')
     def test_cluster_watcher_without_create_trigger_configured(
-        self, mock_get_cb, mock_build_history, mock_settings, mock_read_intent
+        self, mock_get_cb, mock_get_active, mock_settings, mock_read_intent
     ):
         """A new image can run against Terraform that predates CREATE_CB_TRIGGER_NAME.
         That must degrade to modify-only scoping, not crash on a None trigger name."""
@@ -535,23 +524,23 @@ project1,1.11.0
 
         main.cluster_watcher(mock.MagicMock())
 
-        self.assertEqual(mock_build_history.call_args.args[3], ["modify-trigger"])
+        self.assertEqual(mock_get_active.call_args.args[3], ["modify-trigger"])
 
     @mock.patch('src.main._cluster_watcher_worker')
     @mock.patch('src.main.read_intent_data')
     @mock.patch('src.main.WatcherSettings')
-    @mock.patch('src.main.BuildHistory')
+    @mock.patch('src.main.get_active_build_stores')
     @mock.patch('src.main.clients.get_cloudbuild_client')
-    def test_cluster_watcher_fails_closed_on_build_history_error(
-        self, mock_get_cb, mock_build_history, mock_settings, mock_read_intent,
+    def test_cluster_watcher_fails_closed_on_active_build_query_error(
+        self, mock_get_cb, mock_get_active, mock_settings, mock_read_intent,
         mock_worker
     ):
-        """If build history is unavailable we must not assume "nothing in flight"."""
+        """If in-flight builds cannot be listed we must not assume "nothing in flight"."""
         mock_settings.return_value = self._cluster_watcher_params()
         mock_read_intent.return_value = {
             ("fleet-proj-1", "us-central1"): self._cluster_watcher_store()
         }
-        mock_build_history.side_effect = Exception("cloudbuild unavailable")
+        mock_get_active.side_effect = Exception("cloudbuild unavailable")
 
         result = main.cluster_watcher(mock.MagicMock())
 

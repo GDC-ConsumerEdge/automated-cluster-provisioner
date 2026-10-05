@@ -2,7 +2,7 @@ import logging
 import os
 from google.cloud.devtools import cloudbuild
 from google.cloud.devtools.cloudbuild import Build
-from typing import Dict, Iterable, Optional, Set, Union
+from typing import Dict, Iterable, Set
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
@@ -42,19 +42,12 @@ class BuildSummary:
 
 
 class BuildHistory:
-    def __init__(self, project_id: str, region: str, max_retries: int,
-                 trigger_name: Union[str, Iterable[str]],
-                 client: Optional[cloudbuild.CloudBuildClient] = None):
+    def __init__(self, project_id: str, region: str, max_retries: int, trigger_name: str):
         self.project_id = project_id
         self.region = region
         self.max_retries = max_retries
-        # Accepts a single trigger name or several, so a caller that needs visibility
-        # across both the create and modify triggers can share one ListBuilds pass.
-        self.trigger_names = {trigger_name} if isinstance(trigger_name, str) else set(trigger_name)
-        # Injectable so callers can share the client from clients.get_cloudbuild_client().
-        self.client = client or cloudbuild.CloudBuildClient()
-        # Stores with a build currently QUEUED/PENDING/WORKING on any of the triggers above.
-        self.active_stores: Set[str] = set()
+        self.trigger_name = trigger_name
+        self.client = cloudbuild.CloudBuildClient()
         self.builds: Dict[tuple[str, str], BuildSummary] = self._get_build_history()
 
     def _get_build_history(self) ->Dict[tuple[str, str], BuildSummary]:
@@ -79,14 +72,14 @@ class BuildHistory:
         triggers = self.client.list_build_triggers(trigger_request)
 
         for trigger in triggers:
-            if trigger.name in self.trigger_names:
+            if (trigger.name == self.trigger_name):
                 if trigger_name_filter == "":
                     trigger_name_filter += f"trigger_id={trigger.id}"
                 else:
                     trigger_name_filter += f" OR trigger_id={trigger.id}"
 
         if trigger_name_filter == "":
-            raise Exception(f"No triggers found named {sorted(self.trigger_names)}")
+            raise Exception(f"No triggers found named {self.trigger_name}")
 
         request = cloudbuild.ListBuildsRequest(
             project_id=self.project_id,
@@ -114,11 +107,6 @@ class BuildHistory:
                     zone = response.substitutions[key]
                 elif key == "_INTENT_HASH":
                     intent_hash = response.substitutions[key]
-
-            if response.status in IN_FLIGHT_STATUSES:
-                store_id = response.substitutions.get("_STORE_ID")
-                if store_id:
-                    self.active_stores.add(store_id)
 
             if not zone:
                 # Builds are expected to have the _ZONE substitution. This is the value that is
@@ -183,10 +171,30 @@ class BuildHistory:
             return 0
         return self.builds[key].latest_try_count
 
-    def has_active_build(self, store_id: str) -> bool:
-        """Whether the store has a build QUEUED, PENDING or WORKING right now.
 
-        Used to keep a modify build from racing an in-flight create-cluster (or another
-        modify) for the same store.
-        """
-        return store_id in self.active_stores
+def get_active_build_stores(client: cloudbuild.CloudBuildClient, project_id: str,
+                            region: str, trigger_names: Iterable[str]) -> Set[str]:
+    """Returns the _STORE_ID of every QUEUED, PENDING or WORKING build on the given triggers.
+
+    Only in-flight builds are requested, so this is usually one small page regardless of
+    how long the build history is. Raises on any API error; callers should fail closed.
+    """
+    parent = f"projects/{project_id}/locations/{region}"
+    # GetBuildTrigger accepts the trigger name, so we avoid paging through every trigger.
+    trigger_ids = [
+        client.get_build_trigger(request=cloudbuild.GetBuildTriggerRequest(
+            name=f"{parent}/triggers/{name}", project_id=project_id, trigger_id=name)).id
+        for name in trigger_names
+    ]
+    trigger_filter = " OR ".join(f'trigger_id="{t}"' for t in trigger_ids)
+    status_filter = " OR ".join(f'status="{s.name}"' for s in IN_FLIGHT_STATUSES)
+    request = cloudbuild.ListBuildsRequest(
+        project_id=project_id,
+        parent=parent,
+        filter=f"({trigger_filter}) AND ({status_filter})",
+    )
+    return {
+        build.substitutions["_STORE_ID"]
+        for build in client.list_builds(request=request)
+        if build.substitutions.get("_STORE_ID")
+    }
