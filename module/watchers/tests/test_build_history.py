@@ -7,7 +7,7 @@ from google.cloud.devtools.cloudbuild import Build
 
 # Assuming the classes are in a file named 'build_history.py'
 # If not, adjust the import path accordingly
-from src.build_history import BuildHistory, BuildSummary
+from src.build_history import BuildHistory, BuildSummary, get_active_build_stores
 
 Status = Build.Status
 
@@ -464,3 +464,50 @@ class TestBuildHistory(unittest.TestCase):
             history.should_retry_zone_build(None, "")
         with self.assertRaisesRegex(Exception, 'missing zone_name'):
             history.should_retry_zone_build("", "")
+
+class TestGetActiveBuildStores(unittest.TestCase):
+
+    def setUp(self):
+        self.client = MagicMock()
+        self.client.get_build_trigger.side_effect = (
+            lambda request: MagicMock(id=f"id-{request.trigger_id}"))
+
+    def _active_stores(self, builds, trigger_names=("modify-trigger", "create-trigger")):
+        self.client.list_builds.return_value = builds
+        return get_active_build_stores(self.client, "test-project", "us-central1", trigger_names)
+
+    def test_requests_only_in_flight_builds_on_the_given_triggers(self):
+        self._active_stores([])
+
+        request = self.client.list_builds.call_args.kwargs["request"]
+        self.assertEqual(request.parent, "projects/test-project/locations/us-central1")
+        self.assertEqual(
+            request.filter,
+            '(trigger_id="id-modify-trigger" OR trigger_id="id-create-trigger") AND '
+            '(status="QUEUED" OR status="PENDING" OR status="WORKING")')
+
+    def test_looks_up_triggers_by_name_instead_of_listing_all(self):
+        self._active_stores([])
+
+        names = [c.kwargs["request"].name for c in self.client.get_build_trigger.call_args_list]
+        self.assertEqual(names, [
+            "projects/test-project/locations/us-central1/triggers/modify-trigger",
+            "projects/test-project/locations/us-central1/triggers/create-trigger",
+        ])
+        self.client.list_build_triggers.assert_not_called()
+
+    def test_returns_store_ids_and_skips_builds_without_one(self):
+        builds = [
+            create_mock_build("b1", Status.WORKING, {"_STORE_ID": "store-1", "_ZONE": "zone-a"}),
+            create_mock_build("b2", Status.QUEUED, {"_STORE_ID": "store-2"}),
+            create_mock_build("b3", Status.WORKING, {"_ZONE": "zone-c"}),
+        ]
+        self.assertEqual(self._active_stores(builds), {"store-1", "store-2"})
+
+    def test_raises_on_api_error_so_callers_can_fail_closed(self):
+        for method in ("get_build_trigger", "list_builds"):
+            with self.subTest(method=method):
+                self.setUp()
+                getattr(self.client, method).side_effect = Exception("unavailable")
+                with self.assertRaises(Exception):
+                    self._active_stores([])

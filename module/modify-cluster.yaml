@@ -121,6 +121,15 @@ steps:
       gcloud config set api_endpoint_overrides/edgenetwork $EDGE_NETWORK_API_ENDPOINT_OVERRIDE
     fi
 
+    CLUSTER_STATUS=$(gcloud edge-cloud container clusters describe "$CLUSTER_NAME" \
+        --location "$LOCATION" --project "$FLEET_PROJECT_ID" \
+        --format="value(status)" --verbosity none)
+
+    if [ "$CLUSTER_STATUS" != "RUNNING" ]; then
+      log "Cluster ${CLUSTER_NAME} is '${CLUSTER_STATUS:-ABSENT_OR_UNREACHABLE}', not RUNNING. Skipping this pass; the watcher will re-trigger."
+      exit 0
+    fi
+
     if [[ -z "${MAINTENANCE_WINDOW_START}" || -z ${MAINTENANCE_WINDOW_END} || \
             -z ${MAINTENANCE_WINDOW_RECURRENCE} ]]; then
       echo "All maintenance window fields are not set, skipping"

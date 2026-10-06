@@ -39,7 +39,7 @@ from google.cloud import monitoring_v3
 from google.protobuf.timestamp_pb2 import Timestamp
 from dateutil.parser import parse
 from .maintenance_windows import MaintenanceExclusionWindow
-from .build_history import BuildHistory
+from .build_history import BuildHistory, get_active_build_stores
 from .acp_zone import ACPZone, get_zones
 from .acp_membership import get_memberships
 from .clients import GoogleClients
@@ -308,6 +308,7 @@ def _cluster_watcher_worker(
     location: str,
     stores: Dict[str, SourceOfTruthModel],
     params: WatcherSettings,
+    active_build_stores: Set[str],
 ) -> int:
     ec_client = clients.get_edgecontainer_client()
     en_client = clients.get_edgenetwork_client()
@@ -383,6 +384,26 @@ def _cluster_watcher_worker(
         logger.debug(zone_cluster_list)
 
         cluster = zone_cluster_list[0]
+
+        # Only reconcile if there are no active builds in-flight for this store.
+        # This prevents triggering a modify build while create-cluster or another modify
+        # build is still running.
+        if store_id in active_build_stores:
+            logger.info(
+                f'Store {store_id} has an active Cloud Build in progress, skipping update check'
+            )
+            continue
+
+        # Only reconcile settled clusters. Triggering a modify build against a cluster
+        # that is PROVISIONING, RECONCILING or DELETING produces update calls the API
+        # rejects, and burns a build for nothing.
+        if cluster.status != edgecontainer.Cluster.Status.RUNNING:
+            logger.info(
+                f'Cluster {cluster.name} in zone {zone} is '
+                f'{edgecontainer.Cluster.Status(cluster.status).name}, skipping update check'
+            )
+            continue
+
         rw = cluster.maintenance_policy.window.recurring_window
         has_update = False
 
@@ -488,10 +509,26 @@ def cluster_watcher(req: flask.Request):
     config_zone_info = read_intent_data(params, 'fleet_project_id')
     count = 0
 
+    # Queried once per invocation and shared across workers. Only in-flight builds are
+    # requested, so this stays cheap no matter how long the build history is.
+    trigger_names = [params.cloud_build_trigger_name]
+    if params.create_cloud_build_trigger_name:
+        trigger_names.append(params.create_cloud_build_trigger_name)
+    try:
+        active_build_stores = get_active_build_stores(
+            clients.get_cloudbuild_client(), params.project_id, params.region, trigger_names)
+    except Exception:
+        # Fail closed: if we cannot tell whether a create or modify build is already in
+        # flight, triggering one anyway is exactly what this guards against.
+        logger.exception(
+            'Unable to list in-flight Cloud Builds; skipping this pass to avoid racing them'
+        )
+        return 'total zones triggered = 0'
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=params.max_workers) as executor:
         futures = []
         for (project_id, location), stores in config_zone_info.items():
-            future = executor.submit(_cluster_watcher_worker, project_id, location, stores, params)
+            future = executor.submit(_cluster_watcher_worker, project_id, location, stores, params, active_build_stores)
             futures.append(future)
         
         for future in concurrent.futures.as_completed(futures):

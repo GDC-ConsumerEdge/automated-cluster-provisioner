@@ -394,6 +394,7 @@ resource "google_cloudfunctions2_function" "cluster-watcher" {
     environment_variables = {
       GOOGLE_CLOUD_PROJECT                      = var.project_id,
       CB_TRIGGER_NAME                           = "gdce-cluster-reconciler-trigger-${var.environment}"
+      CREATE_CB_TRIGGER_NAME                    = "gdce-cluster-provisioner-trigger-${var.environment}"
       REGION                                    = var.region
       EDGE_CONTAINER_API_ENDPOINT_OVERRIDE      = var.edge_container_api_endpoint_override
       EDGE_NETWORK_API_ENDPOINT_OVERRIDE        = var.edge_network_api_endpoint_override
