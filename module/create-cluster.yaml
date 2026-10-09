@@ -129,6 +129,15 @@ steps:
       fi
     }
 
+    # JIT Full Cluster Repair: the zone has a RUNNING REPAIR operation with jitInstallation set.
+    # Any API or parsing failure counts as not JIT, keeping the default VM shutdown.
+    function is_jit_installation() {
+      [[ "${UNDER_FACTORY_CHECKS}" == "TRUE" ]] || return 1
+      curl -sSf -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+          "${HARDWARE_MANAGEMENT_API_ENDPOINT}/${HARDWARE_MANAGEMENT_API_VERSION}/$1/ops" |
+        jq -e 'any(.zoneOperations[]?; .type == "REPAIR" and .state == "RUNNING" and .repairDetails.jitInstallation == true)' >/dev/null
+    }
+
     function zone_signal() {
       zone_store_path=$1
       state_signal=$2
@@ -896,45 +905,49 @@ steps:
       fi
     fi
     
-    set -eE
-    trap 'die "Error shutting down VMs" "Command that failed: $BASH_COMMAND"' ERR
+    if is_jit_installation "$ZONE_ID"; then
+      log_build_step "JIT installation detected, skipping VM shutdown"
+    else
+      set -eE
+      trap 'die "Error shutting down VMs" "Command that failed: $BASH_COMMAND"' ERR
 
-    export VIRTCTL_VERSION=v1.2.2
-    curl -L https://github.com/kubevirt/kubevirt/releases/download/${VIRTCTL_VERSION}/virtctl-${VIRTCTL_VERSION}-linux-amd64 -o virtctl
-    chmod +x virtctl
+      export VIRTCTL_VERSION=v1.2.2
+      curl -L https://github.com/kubevirt/kubevirt/releases/download/${VIRTCTL_VERSION}/virtctl-${VIRTCTL_VERSION}-linux-amd64 -o virtctl
+      chmod +x virtctl
 
-    log_build_step "Waiting 30m before shutting down VMs"
-    sleep 30m
+      log_build_step "Waiting 30m before shutting down VMs"
+      sleep 30m
 
-    log_build_step "Shutting down running VMs"
-    vms=$(kubectl get vmi -n vm-workloads --no-headers | awk '{print $1}')
-    fail=0
-    for vm in $vms; do
-      echo ">>> [Cluster Create] Shutting down $vm"
-      ./virtctl stop -n vm-workloads $vm || { echo ">>> [Cluster Create] Failed to stop $vm"; fail=1; }
-    done
-    if [[ $fail -ne 0 ]]; then
-      diag=$(
-        kubectl get vmi -n vm-workloads -o json 2>/dev/null | jq '
-          if (.items | length) == 0 then
-            "No running VMs found in namespace vm-workloads"
-          else
-            .items[] | {
-              name: .metadata.name,
-              node: .status.nodeName,
-              phase: .status.phase,
-              terminating_since: .metadata.deletionTimestamp,
-              conditions: [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}],
-              migration: (if .status.migrationState then (.status.migrationState | {source: .sourceNode, target: .targetNode, status: .status, error: .abortReason}) else null end)
-            }
-          end
-        ' || echo "[DIAGNOSTIC_FAILED] Failed to get VMI status"
-      )
-      die "Unsuccessful VM termination sequence" "Failed to stop all VMs" 2 "$diag"
+      log_build_step "Shutting down running VMs"
+      vms=$(kubectl get vmi -n vm-workloads --no-headers | awk '{print $1}')
+      fail=0
+      for vm in $vms; do
+        echo ">>> [Cluster Create] Shutting down $vm"
+        ./virtctl stop -n vm-workloads $vm || { echo ">>> [Cluster Create] Failed to stop $vm"; fail=1; }
+      done
+      if [[ $fail -ne 0 ]]; then
+        diag=$(
+          kubectl get vmi -n vm-workloads -o json 2>/dev/null | jq '
+            if (.items | length) == 0 then
+              "No running VMs found in namespace vm-workloads"
+            else
+              .items[] | {
+                name: .metadata.name,
+                node: .status.nodeName,
+                phase: .status.phase,
+                terminating_since: .metadata.deletionTimestamp,
+                conditions: [.status.conditions[]? | {type: .type, status: .status, reason: .reason, message: .message}],
+                migration: (if .status.migrationState then (.status.migrationState | {source: .sourceNode, target: .targetNode, status: .status, error: .abortReason}) else null end)
+              }
+            end
+          ' || echo "[DIAGNOSTIC_FAILED] Failed to get VMI status"
+        )
+        die "Unsuccessful VM termination sequence" "Failed to stop all VMs" 2 "$diag"
+      fi
+
+      set +eE
+      trap - ERR
     fi
-
-    set +eE
-    trap - ERR
 
     if [ "${BART_CREATE_BUCKET}" = "TRUE" ]; then
       if [[ ! -z $(gcloud storage buckets describe gs://${CLUSTER_NAME}-bart-backup --project=${FLEET_PROJECT_ID}) ]]; then
