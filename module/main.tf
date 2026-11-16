@@ -31,6 +31,7 @@ locals {
     { _TIMEOUT_IN_SECONDS = var.cluster_creation_timeout },
     { _PLATFORM_HEALTHCHECK_TIMEOUT_SECONDS = var.platform_healthcheck_timeout_seconds },
     { _CS_VERSION = var.default_config_sync_version },
+    { _LEGACY_CS_VERSION = var.legacy_config_sync_version },
     { _MAX_RETRIES = var.cluster_creation_max_retries },
     var.skip_identity_service == true ? { _SKIP_IDENTITY_SERVICE = "TRUE" } : {_SKIP_IDENTITY_SERVICE = "FALSE"},
     var.bart_create_bucket == true ? { _BART_CREATE_BUCKET = "TRUE" } : { _BART_CREATE_BUCKET = "FALSE" },

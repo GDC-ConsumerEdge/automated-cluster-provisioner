@@ -13,6 +13,9 @@ This solution automates the provisioning and configuration of Google Distributed
     - [Required Roles for Terraform Agent](#required-roles-for-terraform-agent)
     - [Cluster Intent Git PAT Token](#cluster-intent-git-pat-token)
     - [ConfigSync](#configsync)
+      - [Config Sync Version](#config-sync-version)
+      - [Upgrading Config Sync on Existing Clusters](#upgrading-config-sync-on-existing-clusters)
+      - [Forked Deployments](#forked-deployments)
   - [Installation](#installation)
   - [Usage](#usage)
   - [Cluster Intent](#cluster-intent)
@@ -95,6 +98,44 @@ When using Github, a personal access token must be created and uploaded to Secre
 
 ### ConfigSync
 This project assumes the usage of [ConfigSync](https://cloud.google.com/kubernetes-engine/enterprise/config-sync/docs/overview) for handling declared cluster configuration and any necessary workload configuration in the pre-staging environment.
+
+#### Config Sync Version
+
+ACP installs Config Sync on each new cluster through the fleet Config Management feature. It picks the version from these Terraform variables, based on the GDC version the cluster is created with:
+
+| Variable | Used for |
+|----------|----------|
+| `default_config_sync_version` | Clusters on GDC 1.12.2 or later. Leave empty to use the fleet default or the latest Config Sync release. |
+| `legacy_config_sync_version` | Clusters on GDC versions older than 1.12.2. Leave empty to use `default_config_sync_version` for every cluster. |
+
+Use a supported, patched Config Sync release for `default_config_sync_version` (1.26.0 or later).
+
+On GDC versions older than 1.12.2, Config Sync 1.23 and later can break VM disk provisioning when your sync repository manages `StorageProfile` objects. Deployments in that situation have pinned Config Sync 1.22.2 for every cluster; with these variables, only clusters created on older GDC versions keep it:
+
+```terraform
+  default_config_sync_version = "1.26.0"
+  legacy_config_sync_version  = "1.22.2"
+```
+
+#### Upgrading Config Sync on Existing Clusters
+
+ACP only sets the Config Sync version when it creates a cluster. It doesn't upgrade Config Sync on existing clusters, and GDC cluster upgrades don't change the Config Sync version either. After you upgrade a cluster to GDC 1.12.2 or later, upgrade its Config Sync version, for example with your fleet-wide upgrade script or:
+
+```bash
+gcloud beta container fleet config-management upgrade \
+  --membership=MEMBERSHIP_NAME \
+  --version=1.26.0 \
+  --project=FLEET_PROJECT_ID
+```
+
+#### Forked Deployments
+
+If you run a fork of ACP (see [Deployment Patterns](./module/README.md)), port the Config Sync version selection to it:
+
+- `module/create-cluster.yaml`: the version selection right after the cluster version is resolved, and the `LEGACY_CS_VERSION` step environment variable.
+- `module/main.tf` and `module/variables.tf`: the `_LEGACY_CS_VERSION` trigger substitution and the `legacy_config_sync_version` variable.
+
+Then set the variables as shown above and re-apply Terraform. Existing clusters still need the upgrade described in the previous section. If you can't port the change yet, set each deployment's `_CS_VERSION` trigger substitution (`default_config_sync_version`) to a supported release wherever all new clusters are created on GDC 1.12.2 or later, and keep 1.22.2 only where clusters are still created on older GDC versions.
 
 ## Installation
 ```

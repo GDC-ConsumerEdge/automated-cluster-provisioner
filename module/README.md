@@ -21,7 +21,7 @@ You reference the module in your Terraform configuration using a Git source addr
 #### Example:
 ```terraform
 module "cluster_automation" {
-  source                       = "git::https://github.com/GDC-ConsumerEdge/automated-cluster-provisioner.git?ref=v1.4.0"
+  source                       = "git::https://github.com/GDC-ConsumerEdge/automated-cluster-provisioner.git?ref=v1.5.2"
   project_id                   = "sample-project-id"
   source_of_truth_repo         = "github.com/GDC-ConsumerEdge/automated-cluster-provisioner"
   git_secret_id                = "example-pat-token"
@@ -108,7 +108,8 @@ No modules.
 | <a name="cluster_creation_timeout"></a> [cluster_creation_timeout](#input\_cluster\_creation\_timeout) | Cloud Build timeout in seconds for cluster creation. This should account for time to create the cluster, configure core services (ConfigSync, Robin, VMRuntime, etc..), and time for any workload configuration needed before the health checks pass. This value must be greater than `platform_healthcheck_timeout_seconds` + 6600 seconds (1.8 hours) to ensure a non-negative workload healthcheck timeout. | `number` | 28800 | no |
 | <a name="platform_healthcheck_timeout_seconds"></a> [platform_healthcheck_timeout_seconds](#input\_platform\_healthcheck\_timeout\_seconds) | Timeout in seconds for platform healthcheck. Defaults to 3600 (1h). | `number` | 3600 | no |
 | <a name="cluster_creation_max_retries"></a> [cluster_creation_max_retries](#input\_cluster\_creation\_max\_retries) | The maximum number of retries upon cluster creation failure before marking the zone state as CUSTOMER_FACTORY_TURNUP_CHECKS_FAILED | `number` | 0 | no |
-| <a name="default_config_sync_version"></a> [default_config_sync_version](#input\_default\_config\_sync\_version) | Sets a default ConfigSync version to use for provisioned clusters. If left empty, it will not specify a version at the cluster level. If empty, this will either install the fleet configured version or the latest version of ConfigSync. | `string` | "" | no |
+| <a name="default_config_sync_version"></a> [default_config_sync_version](#input\_default\_config\_sync\_version) | Sets a default ConfigSync version to use for provisioned clusters. If left empty, it will not specify a version at the cluster level. If empty, this will either install the fleet configured version or the latest version of ConfigSync. Use a supported Config Sync release (1.26.0 or later). Clusters created on GDC versions older than 1.12.2 use `legacy_config_sync_version` instead when it is set. | `string` | "" | no |
+| <a name="legacy_config_sync_version"></a> [legacy_config_sync_version](#input\_legacy\_config\_sync\_version) | ConfigSync version to use for clusters created on GDC versions older than 1.12.2 (for example, 1.22.2). On those GDC versions, Config Sync 1.23 and later can break VM disk provisioning when the sync repository manages StorageProfiles. If left empty, `default_config_sync_version` is used for all clusters. | `string` | "" | no |
 | <a name="opt_in_build_messages"></a> [opt_in_build_messages](#input\_opt\_in\_build\_messages) | Opt in to sending build steps and failure messages to Google. These messages help Google provide support on issues during the provisioning process. | `bool` | false | no |
 
 ### Outputs

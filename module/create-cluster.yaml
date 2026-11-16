@@ -471,6 +471,14 @@ steps:
       exit 1
     fi
     export CLUSTER_VERSION="$CLUSTER_VERSION_RESOLVED"
+
+    # Pick the Config Sync version for this cluster. On GDC versions older than 1.12.2,
+    # Config Sync 1.23 and later can break VM disk provisioning when the sync repository
+    # manages StorageProfiles, so use LEGACY_CS_VERSION there if set.
+    if [[ -n "${LEGACY_CS_VERSION}" ]] && ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.12.2"; then
+      CS_VERSION="${LEGACY_CS_VERSION}"
+    fi
+    echo ">>> [Config] Config Sync version for cluster version ${CLUSTER_VERSION}: ${CS_VERSION:-not set (fleet default or latest)}"
     
     export MAINTENANCE_WINDOW_START=$(parse_csv_optional "$CLUSTER_INTENT" "maintenance_window_start")
     export MAINTENANCE_WINDOW_END=$(parse_csv_optional "$CLUSTER_INTENT" "maintenance_window_end")
@@ -972,6 +980,7 @@ steps:
   - 'STORE_ID=$_STORE_ID'
   - 'ZONE=$_ZONE'
   - 'CS_VERSION=$_CS_VERSION'
+  - 'LEGACY_CS_VERSION=$_LEGACY_CS_VERSION'
   - 'BART_CREATE_BUCKET=$_BART_CREATE_BUCKET'
   - 'MAX_RETRIES=$_MAX_RETRIES'
   - 'TRIGGER_NAME=$TRIGGER_NAME'
