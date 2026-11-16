@@ -1,0 +1,20 @@
+# Direct dependencies of the watcher Cloud Functions. The functions install the
+# hash-locked requirements.txt, so regenerate it after editing this file:
+#   uv pip compile requirements.in --universal --python-version 3.12 --generate-hashes -o requirements.txt
+functions-framework==3.*
+google-auth==2.62.2
+google-cloud-build==3.43.0
+google-cloud-edgecontainer==0.8.2
+google-cloud-edgenetwork==0.5.2
+google-cloud-gdchardwaremanagement==0.5.2
+google-cloud-gke-hub==1.26.0
+google-cloud-monitoring==2.32.0
+google-cloud-secret-manager==2.32.0
+google-cloud-storage==3.17.1
+pydantic==2.11.9
+pydantic-settings==2.11.0
+python-dateutil==2.9.0.post0
+protobuf==7.36.2
+# Minimum versions that no longer trust the compromised eMudhra (emSign) CA roots.
+certifi>=2026.10.18
+grpcio>=1.84.1

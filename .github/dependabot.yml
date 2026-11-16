@@ -1,0 +1,16 @@
+# Weekly version updates for the Cloud Functions' hash-locked Python dependencies.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/module/watchers/src"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "pip"
+    directory: "/hwm-events/src"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
