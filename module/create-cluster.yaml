@@ -900,7 +900,10 @@ steps:
     trap 'die "Error shutting down VMs" "Command that failed: $BASH_COMMAND"' ERR
 
     export VIRTCTL_VERSION=v1.2.2
-    curl -L https://github.com/kubevirt/kubevirt/releases/download/${VIRTCTL_VERSION}/virtctl-${VIRTCTL_VERSION}-linux-amd64 -o virtctl
+    # SHA-256 of the official virtctl-${VIRTCTL_VERSION}-linux-amd64 release asset. Update it together with VIRTCTL_VERSION.
+    VIRTCTL_SHA256=69ddd2129c9ca07cc10eb4cc21b5b62ca788d46545d3bf6de51b1be5725b902b
+    curl -fsSL https://github.com/kubevirt/kubevirt/releases/download/${VIRTCTL_VERSION}/virtctl-${VIRTCTL_VERSION}-linux-amd64 -o virtctl
+    echo "${VIRTCTL_SHA256}  virtctl" | sha256sum -c --quiet - || die "virtctl checksum mismatch" "Downloaded virtctl ${VIRTCTL_VERSION} does not match the pinned SHA-256 ${VIRTCTL_SHA256}"
     chmod +x virtctl
 
     log_build_step "Waiting 30m before shutting down VMs"
