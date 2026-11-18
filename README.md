@@ -108,18 +108,29 @@ ACP installs Config Sync on each new cluster through the fleet Config Management
 | `default_config_sync_version` | Clusters on GDC 1.12.2 or later. Leave empty to use the fleet default or the latest Config Sync release. |
 | `legacy_config_sync_version` | Clusters on GDC versions older than 1.12.2. Leave empty to use `default_config_sync_version` for every cluster. |
 
-Use a supported, patched Config Sync release for `default_config_sync_version` (1.26.0 or later).
+Set `default_config_sync_version` to a supported, patched Config Sync release (1.26.0 or later) once it is available in your fleet.
 
-On GDC versions older than 1.12.2, Config Sync 1.23 and later can break VM disk provisioning when your sync repository manages `StorageProfile` objects. Deployments in that situation have pinned Config Sync 1.22.2 for every cluster; with these variables, only clusters created on older GDC versions keep it:
+##### Sync Repositories That Manage StorageProfiles
+
+On GDC versions older than 1.12.2, Config Sync 1.23 and later conflicts with the VM runtime over CDI `StorageProfile` objects, which can break VM disk provisioning. Sync repositories that manage StorageProfiles work around this with the `client.lifecycle.config.k8s.io/mutation: ignore` annotation and Config Sync 1.22.2. To keep Config Sync 1.22.2 only on clusters created on older GDC versions, set:
 
 ```terraform
   default_config_sync_version = "1.26.0"
   legacy_config_sync_version  = "1.22.2"
 ```
 
+GDC 1.12.2 and later fix the conflict, so Config Sync can own StorageProfiles, but only without the annotation. With the annotation, Config Sync doesn't update a StorageProfile that already exists, such as the empty one CDI creates for a StorageClass, and VM disks then fail with `accessModes was not configured in storage profile`. In your sync repository:
+
+- Remove the annotation from the StorageProfile manifests of clusters that get `default_config_sync_version`.
+- Keep it for clusters that get `legacy_config_sync_version`. If both kinds of clusters share a sync directory, give them separate StorageProfile manifests, for example with overlays.
+
 #### Upgrading Config Sync on Existing Clusters
 
-ACP only sets the Config Sync version when it creates a cluster. It doesn't upgrade Config Sync on existing clusters, and GDC cluster upgrades don't change the Config Sync version either. After you upgrade a cluster to GDC 1.12.2 or later, upgrade its Config Sync version, for example with your fleet-wide upgrade script or:
+ACP only sets the Config Sync version when it creates a cluster. It doesn't upgrade Config Sync on existing clusters, and GDC cluster upgrades don't change the Config Sync version either. To move an existing cluster to a supported Config Sync release:
+
+1. Upgrade the cluster to GDC 1.12.2 or later.
+2. If its sync repository manages StorageProfiles, remove the `client.lifecycle.config.k8s.io/mutation: ignore` annotation from those manifests and wait for the change to sync.
+3. Upgrade Config Sync, for example with your fleet-wide upgrade script or:
 
 ```bash
 gcloud beta container fleet config-management upgrade \

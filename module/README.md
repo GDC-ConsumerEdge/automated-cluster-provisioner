@@ -21,7 +21,7 @@ You reference the module in your Terraform configuration using a Git source addr
 #### Example:
 ```terraform
 module "cluster_automation" {
-  source                       = "git::https://github.com/GDC-ConsumerEdge/automated-cluster-provisioner.git?ref=v1.5.2"
+  source                       = "git::https://github.com/GDC-ConsumerEdge/automated-cluster-provisioner.git//module?ref=v1.5.2"
   project_id                   = "sample-project-id"
   source_of_truth_repo         = "github.com/GDC-ConsumerEdge/automated-cluster-provisioner"
   git_secret_id                = "example-pat-token"
@@ -54,7 +54,7 @@ This approach involves creating a fork of the official repository. This gives yo
 #### Example:
 ```terraform
 module "cluster_automation" {
-  source                       = "git::https://github.com/your-organization/automated-cluster-provisioner.git?ref=custom-branch-or-tag"
+  source                       = "git::https://github.com/your-organization/automated-cluster-provisioner.git//module?ref=custom-branch-or-tag"
   project_id                   = "sample-project-id"
   source_of_truth_repo         = "github.com/your-organization/automated-cluster-provisioner"
   git_secret_id                = "example-pat-token"
