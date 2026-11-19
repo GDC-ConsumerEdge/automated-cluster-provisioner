@@ -10,5 +10,5 @@ cluster_creation_timeout     = "86400"
 cluster_creation_max_retries = "0"
 notification_channel_email   = "ops@example.com"
 opt_in_build_messages        = true
-# Empty uses the fleet default. Set a supported release (1.26.0 or later) once it is available in your fleet.
-default_config_sync_version = ""
+# A supported Config Sync release, 1.23 or later.
+default_config_sync_version = "1.25.2"

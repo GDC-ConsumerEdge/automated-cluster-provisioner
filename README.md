@@ -108,14 +108,14 @@ ACP installs Config Sync on each new cluster through the fleet Config Management
 | `default_config_sync_version` | Clusters on GDC 1.12.2 or later. Leave empty to use the fleet default or the latest Config Sync release. |
 | `legacy_config_sync_version` | Clusters on GDC versions older than 1.12.2. Leave empty to use `default_config_sync_version` for every cluster. |
 
-Set `default_config_sync_version` to a supported, patched Config Sync release (1.26.0 or later) once it is available in your fleet.
+Set `default_config_sync_version` to a supported Config Sync release, 1.23 or later (for example, 1.25.2). The [Config Sync release notes](https://docs.cloud.google.com/kubernetes-engine/config-sync/docs/release-notes) list the current versions.
 
 ##### Sync Repositories That Manage StorageProfiles
 
 On GDC versions older than 1.12.2, Config Sync 1.23 and later conflicts with the VM runtime over CDI `StorageProfile` objects, which can break VM disk provisioning. Sync repositories that manage StorageProfiles work around this with the `client.lifecycle.config.k8s.io/mutation: ignore` annotation and Config Sync 1.22.2. To keep Config Sync 1.22.2 only on clusters created on older GDC versions, set:
 
 ```terraform
-  default_config_sync_version = "1.26.0"
+  default_config_sync_version = "1.25.2"
   legacy_config_sync_version  = "1.22.2"
 ```
 
@@ -135,7 +135,7 @@ ACP only sets the Config Sync version when it creates a cluster. It doesn't upgr
 ```bash
 gcloud beta container fleet config-management upgrade \
   --membership=MEMBERSHIP_NAME \
-  --version=1.26.0 \
+  --version=1.25.2 \
   --project=FLEET_PROJECT_ID
 ```
 

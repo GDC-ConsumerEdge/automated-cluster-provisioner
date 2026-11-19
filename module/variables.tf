@@ -176,7 +176,7 @@ variable "platform_healthcheck_timeout_seconds" {
 
 # https://cloud.google.com/kubernetes-engine/enterprise/config-sync/docs/release-notes
 variable "default_config_sync_version" {
-  description = "Sets a default ConfigSync version to use for provisioned clusters. If left empty, it will not specify a version at the cluster level. If empty, this will either install the fleet configured version or the latest version of ConfigSync. Use a supported Config Sync release (1.26.0 or later). Clusters created on GDC versions older than 1.12.2 use legacy_config_sync_version instead when it is set."
+  description = "Sets a default ConfigSync version to use for provisioned clusters. If left empty, it will not specify a version at the cluster level. If empty, this will either install the fleet configured version or the latest version of ConfigSync. Use a supported Config Sync release (1.23 or later). Clusters created on GDC versions older than 1.12.2 use legacy_config_sync_version instead when it is set."
   default     = ""
   type        = string
 }
