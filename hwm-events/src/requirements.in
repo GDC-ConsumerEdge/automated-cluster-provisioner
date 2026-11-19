@@ -2,6 +2,7 @@
 # hash-locked requirements.txt, so regenerate it after editing this file:
 #   uv pip compile requirements.in --universal --python-version 3.11 --generate-hashes -o requirements.txt
 functions-framework==3.*
+google-api-core==2.44.0
 google-auth==2.62.2
 google-cloud-firestore==2.34.1
 google-cloud-gdchardwaremanagement==0.5.2

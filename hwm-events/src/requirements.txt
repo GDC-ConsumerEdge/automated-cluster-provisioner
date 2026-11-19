@@ -378,6 +378,7 @@ google-api-core==2.44.0 \
     --hash=sha256:5ab9a396965c1227d7dea4581e562b7018aa2bca96d2de0be5eb70dc9c8ab3a1 \
     --hash=sha256:8cb9ad8af28de9bc75121686d69b697ce0937e21fad2ad80c9a7e89f22b26e1f
     # via
+    #   -r requirements.in
     #   google-cloud-core
     #   google-cloud-firestore
     #   google-cloud-gdchardwaremanagement
