@@ -1,0 +1,18 @@
+# Weekly version updates for the Cloud Functions' hash-locked Python dependencies.
+# The uv ecosystem regenerates requirements.txt with `uv pip compile`, keeping the
+# --universal, --python-version and --generate-hashes options from its header.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/module/watchers/src"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "uv"
+    directory: "/hwm-events/src"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
