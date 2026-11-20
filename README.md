@@ -101,28 +101,23 @@ This project assumes the usage of [ConfigSync](https://cloud.google.com/kubernet
 
 #### Config Sync Version
 
-ACP installs Config Sync on each new cluster through the fleet Config Management feature. It picks the version from these Terraform variables, based on the GDC version the cluster is created with:
+ACP installs Config Sync on each new cluster through the fleet Config Management feature. The version depends on the GDC version the cluster is created with:
 
-| Variable | Used for |
-|----------|----------|
-| `default_config_sync_version` | Clusters on GDC 1.12.2 or later. Leave empty to use the fleet default or the latest Config Sync release. |
-| `legacy_config_sync_version` | Clusters on GDC versions older than 1.12.2. Leave empty to use `default_config_sync_version` for every cluster. |
+| GDC version | Config Sync version |
+|-------------|---------------------|
+| 1.12.2 or later | `default_config_sync_version`, 1.25.2 by default. You can set it to another supported Config Sync release, 1.23 or later, or to empty to use the fleet default or the latest Config Sync release. |
+| Older than 1.12.2 | Always 1.22.2. |
 
-Set `default_config_sync_version` to a supported Config Sync release, 1.23 or later (for example, 1.25.2). The [Config Sync release notes](https://docs.cloud.google.com/kubernetes-engine/config-sync/docs/release-notes) list the current versions.
+The [Config Sync release notes](https://docs.cloud.google.com/kubernetes-engine/config-sync/docs/release-notes) list the current versions.
 
 ##### Sync Repositories That Manage StorageProfiles
 
-On GDC versions older than 1.12.2, Config Sync 1.23 and later conflicts with the VM runtime over CDI `StorageProfile` objects, which can break VM disk provisioning. Sync repositories that manage StorageProfiles work around this with the `client.lifecycle.config.k8s.io/mutation: ignore` annotation and Config Sync 1.22.2. To keep Config Sync 1.22.2 only on clusters created on older GDC versions, set:
-
-```terraform
-  default_config_sync_version = "1.25.2"
-  legacy_config_sync_version  = "1.22.2"
-```
+On GDC versions older than 1.12.2, Config Sync 1.23 and later conflicts with the VM runtime over CDI `StorageProfile` objects, which can break VM disk provisioning. Sync repositories that manage StorageProfiles work around this with the `client.lifecycle.config.k8s.io/mutation: ignore` annotation and Config Sync 1.22.2, which is why ACP always installs 1.22.2 on clusters created on those GDC versions.
 
 GDC 1.12.2 and later fix the conflict, so Config Sync can own StorageProfiles, but only without the annotation. With the annotation, Config Sync doesn't update a StorageProfile that already exists, such as the empty one CDI creates for a StorageClass, and VM disks then fail with `accessModes was not configured in storage profile`. In your sync repository:
 
-- Remove the annotation from the StorageProfile manifests of clusters that get `default_config_sync_version`.
-- Keep it for clusters that get `legacy_config_sync_version`. If both kinds of clusters share a sync directory, give them separate StorageProfile manifests, for example with overlays.
+- Remove the annotation from the StorageProfile manifests of clusters created on GDC 1.12.2 or later.
+- Keep it for clusters created on older GDC versions. If both kinds of clusters share a sync directory, give them separate StorageProfile manifests, for example with overlays.
 
 #### Upgrading Config Sync on Existing Clusters
 
@@ -143,10 +138,10 @@ gcloud beta container fleet config-management upgrade \
 
 If you run a fork of ACP (see [Deployment Patterns](./module/README.md)), port the Config Sync version selection to it:
 
-- `module/create-cluster.yaml`: the version selection right after the cluster version is resolved, and the `LEGACY_CS_VERSION` step environment variable.
-- `module/main.tf` and `module/variables.tf`: the `_LEGACY_CS_VERSION` trigger substitution and the `legacy_config_sync_version` variable.
+- `module/create-cluster.yaml`: the version selection right after the cluster version is resolved.
+- `module/variables.tf`: the `default_config_sync_version` default.
 
-Then set the variables as shown above and re-apply Terraform. Existing clusters still need the upgrade described in the previous section. If you can't port the change yet, set each deployment's `_CS_VERSION` trigger substitution (`default_config_sync_version`) to a supported release wherever all new clusters are created on GDC 1.12.2 or later, and keep 1.22.2 only where clusters are still created on older GDC versions.
+Then re-apply Terraform. Existing clusters still need the upgrade described in the previous section. If you can't port the change yet, set each deployment's `_CS_VERSION` trigger substitution (`default_config_sync_version`) to a supported release wherever all new clusters are created on GDC 1.12.2 or later, and keep 1.22.2 only where clusters are still created on older GDC versions.
 
 ## Installation
 ```
