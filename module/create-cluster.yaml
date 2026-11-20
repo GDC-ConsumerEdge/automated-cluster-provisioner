@@ -471,6 +471,13 @@ steps:
       exit 1
     fi
     export CLUSTER_VERSION="$CLUSTER_VERSION_RESOLVED"
+
+    # On GDC versions older than 1.12.2, Config Sync 1.23 and later can break VM disk
+    # provisioning when the sync repository manages StorageProfiles, so pin 1.22.2 there.
+    if ! gdc_version_evaluate "${CLUSTER_VERSION}" "1.12.2"; then
+      CS_VERSION="1.22.2"
+    fi
+    echo ">>> [Config] Config Sync version for cluster version ${CLUSTER_VERSION}: ${CS_VERSION:-not set (fleet default or latest)}"
     
     export MAINTENANCE_WINDOW_START=$(parse_csv_optional "$CLUSTER_INTENT" "maintenance_window_start")
     export MAINTENANCE_WINDOW_END=$(parse_csv_optional "$CLUSTER_INTENT" "maintenance_window_end")
