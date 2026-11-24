@@ -1,5 +1,5 @@
 module "cluster_automation" {
-  source                       = "git::https://github.com/GDC-ConsumerEdge/automated-cluster-provisioner.git?ref=v1.3.2"
+  source                       = "git::https://github.com/GDC-ConsumerEdge/automated-cluster-provisioner.git//module?ref=v1.5.2"
   project_id                   = "sample-project-id"
   source_of_truth_repo         = "github.com/GDC-ConsumerEdge/automated-cluster-provisioner"
   git_secret_id                = "example-pat-token"
@@ -12,5 +12,6 @@ module "cluster_automation" {
   cluster_creation_max_retries = "0"
   notification_channel_email   = "ops@example.com"
   opt_in_build_messages        = true
-  default_config_sync_version  = "1.18.3"
+  # A supported Config Sync release, 1.23 or later.
+  default_config_sync_version = "1.25.2"
 }
