@@ -16,7 +16,7 @@ google-cloud-storage==3.17.1
 google-crc32c==1.9.0
 pydantic==2.11.9
 pydantic-settings==2.11.0
-python-dateutil==2.9.0.post0
+python-dateutil==4.0.0
 requests==2.34.2
 protobuf==7.36.2
 # Minimum versions that no longer trust the compromised eMudhra (emSign) CA roots.
